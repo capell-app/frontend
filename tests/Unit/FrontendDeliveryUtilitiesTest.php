@@ -25,9 +25,8 @@ use Capell\Frontend\Support\Routing\FrontendRouteMiddlewareRegistry;
 use Capell\Frontend\Support\Rules\Conditions\CampaignParameterCondition;
 use Capell\Frontend\Support\Rules\Conditions\QueryParameterCondition;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\Cache;
-use Symfony\Component\Console\Command\Command;
 use Symfony\Component\HttpFoundation\Response;
 
 it('builds stable frontend cache keys for page, site, navigation, and render data workflows', function (): void {
@@ -84,7 +83,7 @@ it('builds stable frontend cache keys for page, site, navigation, and render dat
         ->and(CacheEnum::navigationById(5))->toBe('navigation-5')
         ->and(CacheEnum::media(7))->toBe('media-7')
         ->and(CacheEnum::pageIds('listing-key', 4))->toBe('listing-key-gen-4')
-        ->and(CacheEnum::pageModel(Page::class, 99, 10, 2))->toBe('page-model-Page-99-site-10-lang-2')
+        ->and(CacheEnum::pageModel(Page::class, 99, 10, 2))->toBe('page-model-Capell.Core.Models.Page-99-site-10-lang-2')
         ->and(CacheEnum::listingGeneration(10, 2))->toBe('listing-gen-10-2');
 });
 
@@ -112,14 +111,17 @@ it('lets packages compose frontend route middleware without duplicates', functio
         ->and($middleware[$lastMiddlewareKey])->toBe('fallback.after');
 });
 
-it('runs the static HTML generator command with selected site and URL filters', function (): void {
-    artisanCommand('capell:generate-html', [
+it('fails the static HTML generator when selected URL filters do not match eligible pages', function (): void {
+    expect(Artisan::call('capell:generate-html', [
         '--site' => 'not-numeric',
         '--url' => ['/missing-page', 42, '/also-missing'],
-    ])
-        ->expectsOutputToContain('generate static Capell HTML')
-        ->expectsOutputToContain('Generated 0 static page artifact(s).')
-        ->assertExitCode(Command::SUCCESS);
+    ]))->toBe(1)
+        ->and(Artisan::output())->toContain(
+            'generate static Capell HTML',
+            '/missing-page',
+            '/also-missing',
+        )
+        ->not->toContain('Generated ');
 });
 
 it('purges CDN and fragment caches for page surrogate keys', function (): void {
@@ -145,11 +147,11 @@ it('purges CDN and fragment caches for page surrogate keys', function (): void {
         surrogateKeys: ['page-' . $page->getKey(), 'site-' . $site->getKey(), 'lang-' . $language->code],
     );
 
-    expect(Cache::has('fragment:page-fragment'))->toBeTrue();
+    expect(resolve(FragmentCache::class)->remember('page-fragment', static fn (): string => 'regenerated'))->toBe('cached fragment');
 
     PurgeCdnCacheByPageAction::run($page);
 
-    expect(Cache::has('fragment:page-fragment'))->toBeFalse();
+    expect(resolve(FragmentCache::class)->remember('page-fragment', static fn (): string => 'regenerated'))->toBe('regenerated');
 
     Bus::assertDispatched(FlushCdnPurgeBatchJob::class, fn (FlushCdnPurgeBatchJob $job): bool => $job->queue === config('capell-frontend.purge_queue', 'default'));
 });
@@ -177,11 +179,11 @@ it('skips CDN purge jobs without skipping fragment invalidation when no provider
         surrogateKeys: ['page-' . $page->getKey(), 'site-' . $site->getKey(), 'lang-' . $language->code],
     );
 
-    expect(Cache::has('fragment:page-fragment'))->toBeTrue();
+    expect(resolve(FragmentCache::class)->remember('page-fragment', static fn (): string => 'regenerated'))->toBe('cached fragment');
 
     PurgeCdnCacheByPageAction::run($page);
 
-    expect(Cache::has('fragment:page-fragment'))->toBeFalse();
+    expect(resolve(FragmentCache::class)->remember('page-fragment', static fn (): string => 'regenerated'))->toBe('regenerated');
 
     Bus::assertNotDispatched(FlushCdnPurgeBatchJob::class);
 });

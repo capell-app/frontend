@@ -36,17 +36,24 @@ final class PageModelCache
         bool $withEvents = true,
         bool $useCache = true,
     ): ?Pageable {
-        $key = CacheEnum::pageModel($type, $id, $site->id ?? 0, $language->id);
+        $modelClass = Relation::getMorphedModel($type) ?? $type;
 
-        $loader = function () use ($type, $id, $language, $withEvents): ?Pageable {
-            /** @var class-string<Model&Pageable<Model>> $modelClass */
-            $modelClass = Relation::getMorphedModel($type) ?? $type;
+        if (! is_a($modelClass, Model::class, true) || ! is_a($modelClass, Pageable::class, true)) {
+            return null;
+        }
 
-            $callback = fn (): ?Pageable => $modelClass::query()
-                ->where('id', $id)
-                ->publishedDate()
-                ->with($this->canonicalRelations($modelClass, $language->id))
-                ->first();
+        $key = CacheEnum::pageModel($modelClass, $id, $site->id ?? 0, $language->id);
+
+        $loader = function () use ($modelClass, $id, $site, $language, $withEvents): ?Pageable {
+            $callback = function () use ($modelClass, $id, $site, $language): ?Pageable {
+                $query = $modelClass::query()->where('id', $id)->publishedDate();
+
+                if ($site instanceof Site) {
+                    $query->where('site_id', $site->id);
+                }
+
+                return $query->with($this->canonicalRelations($modelClass, $language->id))->first();
+            };
 
             if ($withEvents) {
                 return $callback();
@@ -57,11 +64,26 @@ final class PageModelCache
 
         $model = $useCache ? $this->rememberCache($key, $loader) : $loader();
 
-        if (! $model instanceof Pageable || ! $model instanceof Model) {
+        if ($useCache && $model !== null && ! $model instanceof $modelClass) {
+            $this->removeCacheKey($key);
+            $model = $this->rememberCache($key, $loader);
+        }
+
+        if (! $model instanceof Pageable || ! $model instanceof Model || ! $model instanceof $modelClass) {
             return null;
         }
 
         if ($site instanceof Site) {
+            if ($model->site_id !== $site->id) {
+                $this->removeCacheKey($key);
+
+                return null;
+            }
+
+            if ($model->relationLoaded('parent') && $model->parent?->site_id !== $site->id) {
+                $model->setRelation('parent', null);
+            }
+
             $this->injectTransientRelations($model, $site, $language);
         } elseif ($model->translation !== null && $model->pageUrl !== null) {
             $model->translation->setRelation('language', $language);
