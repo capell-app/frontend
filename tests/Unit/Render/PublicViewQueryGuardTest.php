@@ -11,7 +11,6 @@ use Capell\Frontend\Data\FrontendRenderContextData;
 use Capell\Frontend\Enums\FrontendRenderAudience;
 use Capell\Frontend\Support\Render\PublicViewQueryGuard;
 use Illuminate\Container\Container as LaravelContainer;
-use Illuminate\Contracts\Config\Repository;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -178,8 +177,8 @@ it('keeps nested guards active and restores state after exceptions', function ()
 
                 throw new RuntimeException('nested render failed');
             });
-        } catch (RuntimeException $runtimeException) {
-            expect($runtimeException->getMessage())->toBe('nested render failed')
+        } catch (RuntimeException $exception) {
+            expect($exception->getMessage())->toBe('nested render failed')
                 ->and($guard->isActive())->toBeTrue();
         }
 
@@ -198,9 +197,8 @@ it('resolves the query guard from the current container when a query is dispatch
     $baseApplication = app();
     $baseGuard = resolve(PublicViewQueryGuard::class);
     $sandbox = new LaravelContainer;
-    $sandbox->instance('config', $baseApplication->make(Repository::class));
+    $sandbox->instance('config', $baseApplication->make('config'));
     $sandbox->scoped(PublicViewQueryGuard::class);
-
     $sandboxGuard = $sandbox->make(PublicViewQueryGuard::class);
     $reports = [];
 

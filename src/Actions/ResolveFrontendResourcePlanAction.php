@@ -207,11 +207,7 @@ final class ResolveFrontendResourcePlanAction
         $diagnostics = [];
 
         foreach ($declarations as $resource) {
-            if (! $resource->source instanceof ExternalResourceSourceData) {
-                continue;
-            }
-
-            if ($resource->source->integrity !== null) {
+            if (! $resource->source instanceof ExternalResourceSourceData || $resource->source->integrity !== null) {
                 continue;
             }
 

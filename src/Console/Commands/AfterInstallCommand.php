@@ -20,8 +20,6 @@ final class AfterInstallCommand extends Command
 {
     use DescribesCommandOptions;
 
-    private const int PROCESS_TIMEOUT_SECONDS = 900;
-
     protected $signature = 'capell:frontend-after-install
         {--apply : Apply the printed plan in non-interactive mode}
         {--dev : Run the Vite development build instead of the production build}';
@@ -77,7 +75,7 @@ final class AfterInstallCommand extends Command
             ->all();
         $this->writeViteInputManifest($inputs);
 
-        $build = Process::timeout(self::PROCESS_TIMEOUT_SECONDS)->run($buildCommand);
+        $build = Process::run($buildCommand);
         $this->outputProcessStreams($build->output(), $build->errorOutput());
 
         if (! $build->successful()) {
@@ -120,7 +118,7 @@ final class AfterInstallCommand extends Command
             return true;
         }
 
-        $result = Process::timeout(self::PROCESS_TIMEOUT_SECONDS)->run($command);
+        $result = Process::run($command);
         $this->outputProcessStreams($result->output(), $result->errorOutput());
 
         if ($result->successful()) {
