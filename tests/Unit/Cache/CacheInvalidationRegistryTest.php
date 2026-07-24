@@ -6,6 +6,7 @@ use Capell\Core\Enums\MediaCollectionEnum;
 use Capell\Core\Models\Media;
 use Capell\Core\Models\Page;
 use Capell\Core\Models\Site;
+use Capell\Core\Models\SiteDomain;
 use Capell\Frontend\Data\CacheInvalidationRule;
 use Capell\Frontend\Support\Cache\CacheInvalidationDependencyRegistry;
 use Capell\Frontend\Support\Cache\CacheInvalidationExecutor;
@@ -13,12 +14,30 @@ use Capell\Frontend\Support\Cache\CacheInvalidationRegistry;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 
-it('plans a frontend tag flush for wildcard model dependencies', function (): void {
+it('invalidates page caches when site-level data changes', function (): void {
+    // Site data is rendered into pages — the site name reaches the page title —
+    // so a site or domain change must clear page caches, not only site caches.
+    // Without this a rename leaves every cached page showing the old name.
+    foreach ([Site::class, SiteDomain::class] as $modelClass) {
+        $plan = resolve(CacheInvalidationRegistry::class)->planForModel($modelClass);
+
+        expect(collect($plan->rules)->contains(
+            fn (CacheInvalidationRule $rule): bool => $rule->kind === CacheInvalidationRule::KIND_INVALIDATE_PATTERN
+                && $rule->cacheKey === 'page-*',
+        ))->toBeTrue($modelClass . ' must invalidate page-*');
+    }
+});
+
+it('plans scoped pattern invalidation for wildcard model dependencies', function (): void {
     $plan = resolve(CacheInvalidationRegistry::class)->planForModel(Page::class);
 
-    expect($plan->rules)->toHaveCount(1)
-        ->and($plan->rules[0]->kind)->toBe(CacheInvalidationRule::KIND_FLUSH_FRONTEND_TAG)
-        ->and($plan->rules[0]->cacheKey)->toBeNull();
+    expect(collect($plan->rules)->contains(
+        fn (CacheInvalidationRule $rule): bool => $rule->kind === CacheInvalidationRule::KIND_INVALIDATE_PATTERN
+            && $rule->cacheKey === 'page-*',
+    ))->toBeTrue()
+        ->and(collect($plan->rules)->contains(
+            fn (CacheInvalidationRule $rule): bool => $rule->kind === CacheInvalidationRule::KIND_FLUSH_FRONTEND_TAG,
+        ))->toBeFalse();
 });
 
 it('registers custom key dependencies and forgets those cache entries', function (): void {
@@ -74,7 +93,21 @@ it('does not flush unrelated application cache entries for wildcard frontend dep
     expect(Cache::get('unrelated-application-key'))->toBe('keep-me');
 });
 
-it('flushes frontend cache for site logo media changes', function (): void {
+it('invalidates only cache keys matching a wildcard dependency', function (): void {
+    $registry = resolve(CacheInvalidationRegistry::class);
+    $executor = resolve(CacheInvalidationExecutor::class);
+
+    $executor->setToCache('page-123', 'stale-page');
+    $executor->setToCache('unrelated-feature', 'keep-me');
+    $executor->flushLocalCache();
+
+    $registry->invalidateForModel(Page::class);
+
+    expect($executor->getFromCache('page-123'))->toBeNull()
+        ->and($executor->getFromCache('unrelated-feature'))->toBe('keep-me');
+});
+
+it('uses scoped site and page invalidation for site logo media changes', function (): void {
     $site = Site::factory()->create();
     $media = Media::factory()
         ->model($site)
@@ -83,8 +116,12 @@ it('flushes frontend cache for site logo media changes', function (): void {
 
     $plan = resolve(CacheInvalidationRegistry::class)->planForChangedModel($media);
 
-    expect($plan->rules)->toHaveCount(1)
-        ->and($plan->rules[0]->kind)->toBe(CacheInvalidationRule::KIND_FLUSH_FRONTEND_TAG);
+    expect(collect($plan->rules)->contains(
+        fn (CacheInvalidationRule $rule): bool => $rule->kind === CacheInvalidationRule::KIND_INVALIDATE_PATTERN,
+    ))->toBeTrue()
+        ->and(collect($plan->rules)->contains(
+            fn (CacheInvalidationRule $rule): bool => $rule->kind === CacheInvalidationRule::KIND_FLUSH_FRONTEND_TAG,
+        ))->toBeFalse();
 });
 
 it('does not flush frontend cache for unrelated media changes', function (): void {
@@ -106,7 +143,7 @@ it('bumps the frontend generation for wildcard dependencies on non-atomic cache 
     config()->set('cache.stores.file.path', $cachePath);
     Cache::purge('file');
 
-    $generationKey = 'capell.cache.generation.' . config('capell.cache_tag', 'capell-app');
+    $generationKey = 'capell.cache.pattern-generation.' . hash('sha256', 'page-*');
     Cache::store()->forget($generationKey);
 
     try {

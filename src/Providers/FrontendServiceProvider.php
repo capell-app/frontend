@@ -27,6 +27,7 @@ use Capell\Frontend\Console\Commands\GenerateErrorPagesCommand;
 use Capell\Frontend\Console\Commands\GenerateHtmlCommand;
 use Capell\Frontend\Console\Commands\GenerateTailwindAssetsCommand;
 use Capell\Frontend\Console\Commands\InstallCommand;
+use Capell\Frontend\Console\Commands\InvalidateDueScheduledPublicationCachesCommand;
 use Capell\Frontend\Console\Commands\UpgradeCommand;
 use Capell\Frontend\Contracts\AdminAccessCheckerInterface;
 use Capell\Frontend\Contracts\AssetsRegistryInterface;
@@ -174,7 +175,6 @@ use Illuminate\Routing\UrlGenerator as LaravelUrlGenerator;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\Facades\Vite;
@@ -185,28 +185,6 @@ use Spatie\LaravelPackageTools\Package;
 
 final class FrontendServiceProvider extends AbstractPackageServiceProvider
 {
-    private const array SITE_CHECK_SCHEDULE_FREQUENCIES = [
-        'everyMinute' => true,
-        'everyTwoMinutes' => true,
-        'everyThreeMinutes' => true,
-        'everyFourMinutes' => true,
-        'everyFiveMinutes' => true,
-        'everyTenMinutes' => true,
-        'everyFifteenMinutes' => true,
-        'everyThirtyMinutes' => true,
-        'hourly' => true,
-        'everyTwoHours' => true,
-        'everyThreeHours' => true,
-        'everyFourHours' => true,
-        'everySixHours' => true,
-        'daily' => true,
-        'twiceDaily' => true,
-        'weekly' => true,
-        'monthly' => true,
-        'quarterly' => true,
-        'yearly' => true,
-    ];
-
     public static string $name = 'capell-frontend';
 
     public static string $packageName = 'capell-app/frontend';
@@ -215,8 +193,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
     {
         $this
             ->registerLoggingChannel()
-            ->registerThemeRuntime()
-            ->registerPackageMetadata();
+            ->registerThemeRuntime();
 
         $this->app->singletonIf(
             CacheBypassResolver::class,
@@ -395,6 +372,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
                 GenerateTailwindAssetsCommand::class,
                 GenerateHtmlCommand::class,
                 GenerateErrorPagesCommand::class,
+                InvalidateDueScheduledPublicationCachesCommand::class,
             ])
             ->hasConfigFile()
             ->hasTranslations()
@@ -432,7 +410,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
             ->configureVite()
             ->bootstrapFrontendEvents()
             ->registerPublicViewQueryListener()
-            ->registerSiteCheckSchedule()
+            ->registerScheduledPublicationInvalidation()
             ->registerSettingsSchemas()
             ->registerViewComposers();
     }
@@ -571,31 +549,6 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
         return $this;
     }
 
-    private function registerSiteCheckSchedule(): self
-    {
-        if (! $this->app->runningInConsole()) {
-            return $this;
-        }
-
-        $frequency = config('capell-frontend.schedule_page_cleaner', 'daily');
-
-        if (! is_string($frequency) || $frequency === '') {
-            return $this;
-        }
-
-        if (! isset(self::SITE_CHECK_SCHEDULE_FREQUENCIES[$frequency])) {
-            Log::warning('Invalid schedule frequency: ' . $frequency);
-
-            return $this;
-        }
-
-        $this->registerSchedule(function (Schedule $schedule) use ($frequency): void {
-            $schedule->command('capell:frontend-site-check')->{$frequency}();
-        });
-
-        return $this;
-    }
-
     private function registerPublishCommands(): self
     {
         // Publish under both the Capell-specific tag and Laravel's conventional
@@ -651,6 +604,18 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
                 );
             },
         );
+
+        return $this;
+    }
+
+    private function registerScheduledPublicationInvalidation(): self
+    {
+        $this->registerSchedule(function (Schedule $schedule): void {
+            $schedule->command('capell:invalidate-due-scheduled-publications')
+                ->everyMinute()
+                ->withoutOverlapping()
+                ->onOneServer();
+        });
 
         return $this;
     }
