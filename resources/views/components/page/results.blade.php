@@ -34,11 +34,7 @@
 <div
     {{ $attributes->merge(['class' => 'capell-component capell-page-results results @container']) }}
 >
-    <p
-        class="sr-only"
-        role="status"
-        aria-live="polite"
-    >
+    <p class="sr-only" role="status" aria-live="polite">
         {{ $resultCount }} {{ __('capell-frontend::messages.results_found') }}
     </p>
 

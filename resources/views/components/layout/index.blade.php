@@ -1,4 +1,6 @@
 <?php
+
+declare(strict_types=1);
 use Capell\Core\Contracts\Pageable;
 use Capell\Core\Enums\ContentStructure;
 use Capell\Core\Models\Site;
@@ -57,7 +59,7 @@ $htmlContentStructure = ContentStructure::Html;
                 :content="$pageTranslation?->content ?? ''"
                 :content-type="$pageType?->content_structure ?? $htmlContentStructure"
                 :title="$pageTranslation?->title ?? ''"
-                class="mx-auto max-w-2xl text-slate-700 [&_h1]:text-slate-950"
+                class="[&_h1]:text-slate-950 mx-auto max-w-2xl text-slate-700"
                 heading-tag="h1"
                 heading-size="h1"
                 text-align="center"

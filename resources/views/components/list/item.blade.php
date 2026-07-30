@@ -15,12 +15,12 @@
 
 <li
     {{
-        $attributes->class([
-            'list-item',
-            'capell-component capell-list-item',
-            'active' => $active,
-        ])
-    }}
+    $attributes->class([
+        'list-item',
+        'capell-component capell-list-item',
+        'active' => $active,
+    ])
+}}
 >
     <a
         href="{{ $item->data['url'] ?? '' }}"

@@ -117,17 +117,17 @@
 
 <div
     {{
-        $attributes->class([
-            'content-component [&>:first-child]:mt-0 [&>:last-child]:mb-0',
-            'capell-component capell-components-content',
-            'max-w-none' => $width === 'full',
-            'mx-auto' => $align === 'center' || (! $align && $textAlign === 'center'),
-            'text-left' => $textAlign === 'left',
-            'text-right' => $textAlign === 'right',
-            'text-center' => $textAlign === 'center',
-            $textAlign => ! in_array($textAlign, ['left', 'right', 'center'], true),
-        ])
-    }}
+    $attributes->class([
+        'content-component [&>:first-child]:mt-0 [&>:last-child]:mb-0',
+        'capell-component capell-components-content',
+        'max-w-none' => $width === 'full',
+        'mx-auto' => $align === 'center' || (! $align && $textAlign === 'center'),
+        'text-left' => $textAlign === 'left',
+        'text-right' => $textAlign === 'right',
+        'text-center' => $textAlign === 'center',
+        $textAlign => ! in_array($textAlign, ['left', 'right', 'center'], true),
+    ])
+}}
 >
     @if ($image)
         {{-- format-ignore-start --}}

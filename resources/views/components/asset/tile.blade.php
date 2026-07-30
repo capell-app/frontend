@@ -38,14 +38,14 @@
 
 <div
     {{
-        $attributes->class([
-            'capell-component capell-asset-tile asset-item asset-tile group @container/item overflow-hidden border border-slate-200 bg-white shadow-sm ring-1 ring-slate-950/5 transition duration-200 hover:border-slate-300 hover:shadow-md',
-            'grid grid-cols-12' => $imageInline,
-            'flex flex-col' => $imageOnTop || ! $image,
-            'cursor-pointer' => $url,
-            'rounded-lg' => $roundedImages,
-        ])
-    }}
+    $attributes->class([
+        'capell-component capell-asset-tile asset-item asset-tile group @container/item overflow-hidden border border-slate-200 bg-white shadow-sm ring-1 ring-slate-950/5 transition duration-200 hover:border-slate-300 hover:shadow-md',
+        'grid grid-cols-12' => $imageInline,
+        'flex flex-col' => $imageOnTop || ! $image,
+        'cursor-pointer' => $url,
+        'rounded-lg' => $roundedImages,
+    ])
+}}
 >
     @if ($image)
         @php
@@ -92,11 +92,11 @@
 
     <div
         @class([
-            'flex flex-1 flex-col p-6',
-            'lg:px-8 lg:py-6' => $size !== 'sm',
-            'col-span-8' => $imageInline && ! $imageOnRight,
-            'order-first col-span-8' => $imageInline && $imageOnRight,
-        ])
+        'flex flex-1 flex-col p-6',
+        'lg:px-8 lg:py-6' => $size !== 'sm',
+        'col-span-8' => $imageInline && ! $imageOnRight,
+        'order-first col-span-8' => $imageInline && $imageOnRight,
+    ])
     >
         @if ($publishDate && $publishDatePosition === 'top')
             <time
@@ -125,8 +125,8 @@
 
         <div
             @class([
-                'max-w-none break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0',
-            ])
+            'max-w-none break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0',
+        ])
         >
             {{-- format-ignore-start --}}
             <{{ $headingSize }}
@@ -177,15 +177,12 @@
                     title="{{ htmlspecialchars(strip_tags($parentLabel)) }}"
                     @wireNavigate
                 >
-                    &raquo;
-                    {{ $parentLabel }}
+                    &raquo; {{ $parentLabel }}
                 </a>
             @endif
 
             @if ($summary)
-                <p class="mt-3 line-clamp-5 leading-7 text-slate-600">
-                    {{ $summary }}
-                </p>
+                <p class="mt-3 line-clamp-5 leading-7 text-slate-600">{{ $summary }}</p>
             @endif
         </div>
 

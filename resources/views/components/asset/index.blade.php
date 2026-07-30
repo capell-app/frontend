@@ -68,22 +68,22 @@
 
 <div
     {{
-        $attributes->class([
-            '@container/item capell-component capell-asset-index asset-item asset-index group w-full min-w-0 max-w-full overflow-hidden bg-white transition duration-200',
-            'flex min-h-56 rounded-lg border border-slate-200 shadow-sm ring-1 ring-slate-950/5 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg' => ! $isBlogArticleCard,
-            'grid min-h-0 rounded-md border border-slate-200/70 shadow-[0_1px_2px_rgba(15,23,42,0.05)] ring-1 ring-slate-950/5 hover:border-slate-300 hover:shadow-md' => $isBlogArticleCard,
-        ])
-            ->only(['class', 'role'])
-            ->merge(['style' => $cardStyle])
-    }}
+    $attributes->class([
+        '@container/item capell-component capell-asset-index asset-item asset-index group w-full min-w-0 max-w-full overflow-hidden bg-white transition duration-200',
+        'flex min-h-56 rounded-lg border border-slate-200 shadow-sm ring-1 ring-slate-950/5 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg' => ! $isBlogArticleCard,
+        'grid min-h-0 rounded-md border border-slate-200/70 shadow-[0_1px_2px_rgba(15,23,42,0.05)] ring-1 ring-slate-950/5 hover:border-slate-300 hover:shadow-md' => $isBlogArticleCard,
+    ])
+        ->only(['class', 'role'])
+        ->merge(['style' => $cardStyle])
+}}
 >
     @if ($hasImage)
         <div
             @class([
-                'asset-image w-full overflow-hidden bg-slate-100',
-                'aspect-[16/9]' => ! $isBlogArticleCard,
-                'h-full min-h-44' => $isBlogArticleCard,
-            ])
+            'asset-image w-full overflow-hidden bg-slate-100',
+            'aspect-[16/9]' => ! $isBlogArticleCard,
+            'h-full min-h-44' => $isBlogArticleCard,
+        ])
         >
             @if ($url)
                 <a
@@ -126,11 +126,11 @@
     @if ($hasContent)
         <div
             @class([
-                'asset-content relative flex min-w-0 grow flex-col overflow-hidden',
-                'p-6' => ! $isBlogArticleCard,
-                'p-5 xl:p-6' => $isBlogArticleCard,
-                "before:content-['-'] before:absolute before:left-3 before:top-8 before:text-primary before:font-bold pl-8" => $hasBullet,
-            ])
+            'asset-content relative flex min-w-0 grow flex-col overflow-hidden',
+            'p-6' => ! $isBlogArticleCard,
+            'p-5 xl:p-6' => $isBlogArticleCard,
+            "before:content-['-'] before:absolute before:left-3 before:top-8 before:text-primary before:font-bold pl-8" => $hasBullet,
+        ])
         >
             @if ($publishDate && $publishDatePosition === 'top')
                 <div class="mb-5">
@@ -171,13 +171,13 @@
             @else
                 <span
                     @class([
-                        'block leading-tight font-semibold break-words text-slate-950',
-                        'text-balance' => $titleBalance,
-                        'text-xl md:text-2xl' => ! $size,
-                        'text-2xl md:text-3xl' => $size === 'lg',
-                        'text-lg md:text-xl' => $size === 'md',
-                        'text-base md:text-lg' => $size === 'sm',
-                    ])
+                    'block leading-tight font-semibold break-words text-slate-950',
+                    'text-balance' => $titleBalance,
+                    'text-xl md:text-2xl' => ! $size,
+                    'text-2xl md:text-3xl' => $size === 'lg',
+                    'text-lg md:text-xl' => $size === 'md',
+                    'text-base md:text-lg' => $size === 'sm',
+                ])
                 >
                     @if ($icon)
                         <x-dynamic-component
@@ -205,11 +205,9 @@
 
             @if ($withSummary && $summary)
                 <div
-                    class="mt-4 line-clamp-3 w-full max-w-none overflow-hidden text-base leading-7 break-words text-slate-600 [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+                    class="[&>:first-child]:mt-0 [&>:last-child]:mb-0 mt-4 line-clamp-3 w-full max-w-none overflow-hidden text-base leading-7 break-words text-slate-600"
                 >
-                    <p>
-                        {{ $summary }}
-                    </p>
+                    <p>{{ $summary }}</p>
                 </div>
             @endif
 
