@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Capell\Frontend\Support\Cache;
 
+use Capell\Core\Contracts\Extensions\RecordsExtensionContributionReceipt;
 use Capell\Core\Contracts\Pageable;
+use Capell\Core\Enums\ExtensionContributionReceiptType;
 use Capell\Core\Enums\MediaCollectionEnum;
 use Capell\Core\Models\ContentGraphEdge;
 use Capell\Core\Models\Media;
@@ -23,6 +25,7 @@ final class CacheInvalidationRegistry
         private readonly CacheInvalidationDependencyRegistry $dependencies,
         private readonly CacheInvalidationExecutor $executor,
         private readonly TranslationCacheDependencyRegistry $translationDependencies,
+        private readonly PublicRenderDataCacheDependencyRegistry $publicRenderDataDependencies,
     ) {
         foreach ($this->dependencies->allPatterns() as $pattern) {
             $this->executor->registerCacheInvalidationPattern($pattern);
@@ -36,7 +39,17 @@ final class CacheInvalidationRegistry
 
     public function invalidateChangedModel(Model $model): void
     {
-        $this->executor->execute($this->planForChangedModel($model));
+        $this->publicRenderDataDependencies->invalidate($model, function (array $publicRules) use ($model): void {
+            try {
+                $plan = $this->planForChangedModelWithinBounds($model);
+                $this->executor->execute(new CacheInvalidationPlanData($this->uniqueRules([
+                    ...$publicRules,
+                    ...$plan->rules,
+                ])));
+            } catch (RuntimeException) {
+                $this->executor->execute(new CacheInvalidationPlanData([CacheInvalidationRule::flushFrontendTag()]));
+            }
+        });
     }
 
     public function planForModel(string $modelClass): CacheInvalidationPlanData
@@ -62,7 +75,12 @@ final class CacheInvalidationRegistry
     public function planForChangedModel(Model $model): CacheInvalidationPlanData
     {
         try {
-            return $this->planForChangedModelWithinBounds($model);
+            $plan = $this->planForChangedModelWithinBounds($model);
+
+            return new CacheInvalidationPlanData($this->uniqueRules([
+                ...$this->publicRenderDataDependencies->rulesFor($model),
+                ...$plan->rules,
+            ]));
         } catch (RuntimeException) {
             return new CacheInvalidationPlanData([CacheInvalidationRule::flushFrontendTag()]);
         }
@@ -78,6 +96,21 @@ final class CacheInvalidationRegistry
                 $this->executor->registerCacheInvalidationPattern($pattern);
             }
         }
+
+        $this->receipts()?->recordContribution(
+            ExtensionContributionReceiptType::CacheDependency,
+            'cache-dependency:' . $modelClass,
+            $modelClass,
+            self::class,
+            'frontend',
+        );
+    }
+
+    private function receipts(): ?RecordsExtensionContributionReceipt
+    {
+        return app()->bound(RecordsExtensionContributionReceipt::class)
+            ? resolve(RecordsExtensionContributionReceipt::class)
+            : null;
     }
 
     private function planForChangedModelWithinBounds(Model $model): CacheInvalidationPlanData

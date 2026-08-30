@@ -2,13 +2,21 @@
 
 declare(strict_types=1);
 
+use Capell\Core\Contracts\Extensions\RecordsExtensionContributionReceipt;
+use Capell\Core\Enums\ExtensionContributionType;
+use Capell\Core\Support\Extensions\ExtensionContributionReceiptContext;
+use Capell\Core\Support\Extensions\ExtensionContributionReceiptRegistry;
+use Capell\Core\Support\Extensions\ExtensionPosition;
 use Capell\Frontend\Contracts\RenderHookExtensionInterface;
 use Capell\Frontend\Data\MainContentRenderHookData;
 use Capell\Frontend\Data\RenderHookContext;
 use Capell\Frontend\Data\RenderHookContributionData;
 use Capell\Frontend\Enums\RenderHookLocation;
 use Capell\Frontend\Enums\RenderHookRegistrationType;
+use Capell\Frontend\Support\Render\FrontendHookRegistrar;
 use Capell\Frontend\Support\Render\RenderHookRegistry;
+use Illuminate\Container\Container;
+use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\View;
 
@@ -24,6 +32,83 @@ it('registers and retrieves hooks; handles collisions', function (): void {
         ->and(count($hooks))->toBe(2)
         ->and($hooks[0]())->toBe('A')
         ->and($hooks[1]())->toBe('B');
+});
+
+it('emits a receipt at the direct render hook boundary', function (): void {
+    $receipts = new ExtensionContributionReceiptRegistry;
+    app()->instance(ExtensionContributionReceiptRegistry::class, $receipts);
+    $registry = new RenderHookRegistry;
+
+    $receipts->withContext(
+        ExtensionContributionReceiptContext::forPackage('vendor/frontend-hooks', 'frontend', 'Vendor\\FrontendServiceProvider'),
+        function () use ($registry): void {
+            $registry->registerView(RenderHookLocation::Footer, 'vendor::footer');
+        },
+    );
+
+    expect($receipts->forPackage('vendor/frontend-hooks'))->toHaveCount(1)
+        ->and($receipts->forPackage('vendor/frontend-hooks')[0]->type)->toBe(ExtensionContributionType::RenderHook);
+});
+
+it('preserves one-argument construction for direct package callers', function (): void {
+    $receipts = new ExtensionContributionReceiptRegistry;
+    app()->instance(RecordsExtensionContributionReceipt::class, $receipts);
+    $registry = new RenderHookRegistry;
+    $registrar = new FrontendHookRegistrar($registry);
+    $extension = new class implements RenderHookExtensionInterface
+    {
+        public function render(RenderHookContext $context): string
+        {
+            return '<aside>compatibility hook</aside>';
+        }
+    };
+
+    $receipts->withContext(
+        ExtensionContributionReceiptContext::forPackage('vendor/frontend-hooks', 'frontend', 'Vendor\\FrontendServiceProvider'),
+        function () use ($registrar, $extension): void {
+            $registrar->contribute(
+                RenderHookLocation::Footer,
+                $extension,
+                'vendor/frontend-hooks',
+                'compatibility-hook',
+            );
+        },
+    );
+
+    expect($registry->renderAll(RenderHookLocation::Footer))
+        ->toBe('<aside>compatibility hook</aside>')
+        ->and(collect($receipts->forPackage('vendor/frontend-hooks'))->contains(
+            static fn (object $receipt): bool => $receipt->key === 'compatibility-hook'
+                && $receipt->sourceClass === FrontendHookRegistrar::class,
+        ))->toBeTrue();
+});
+
+it('fails closed for one-argument construction without a receipt binding', function (): void {
+    app()->instance(RecordsExtensionContributionReceipt::class, null);
+    app()->offsetUnset(RecordsExtensionContributionReceipt::class);
+
+    expect(app()->bound(RecordsExtensionContributionReceipt::class))->toBeFalse();
+
+    expect(fn (): FrontendHookRegistrar => new FrontendHookRegistrar(new RenderHookRegistry))
+        ->toThrow(BindingResolutionException::class);
+});
+
+it('emits distinct receipts for unkeyed closures at one hook location', function (): void {
+    $receipts = new ExtensionContributionReceiptRegistry;
+    app()->instance(ExtensionContributionReceiptRegistry::class, $receipts);
+    $registry = new RenderHookRegistry;
+
+    $receipts->withContext(
+        ExtensionContributionReceiptContext::forPackage('vendor/frontend-hooks', 'frontend', 'Vendor\\FrontendServiceProvider'),
+        function () use ($registry): void {
+            $registry->registerCallable(RenderHookLocation::Footer, static fn (): string => 'one');
+            $registry->registerCallable(RenderHookLocation::Footer, static fn (): string => 'two');
+        },
+    );
+
+    expect($receipts->forPackage('vendor/frontend-hooks'))->toHaveCount(2)
+        ->and($receipts->forPackage('vendor/frontend-hooks')[0]->key)
+        ->not->toBe($receipts->forPackage('vendor/frontend-hooks')[1]->key);
 });
 
 it('deduplicates keyed contributions by stable key and exposes diagnostics', function (): void {
@@ -58,6 +143,54 @@ it('deduplicates keyed contributions by stable key and exposes diagnostics', fun
         ->and($diagnostics['footer'][0]['key'])->toBe('footer-banner')
         ->and($diagnostics['footer'][0]['registrationType'])->toBe(RenderHookRegistrationType::ExtensionClass->value)
         ->and($diagnostics['footer'][0]['cacheSafe'])->toBeFalse();
+});
+
+it('deduplicates equivalent contributions across provider bootstrap callbacks', function (): void {
+    $extensionFactory = static fn (string $variant): RenderHookExtensionInterface => new readonly class($variant) implements RenderHookExtensionInterface
+    {
+        public function __construct(private string $variant) {}
+
+        public function render(RenderHookContext $context): string
+        {
+            return $this->variant;
+        }
+    };
+
+    $container = new Container;
+    $container->singleton(RenderHookRegistry::class);
+    $container->singleton(FrontendHookRegistrar::class, static fn (Container $container): FrontendHookRegistrar => new FrontendHookRegistrar(
+        $container->make(RenderHookRegistry::class),
+        new ExtensionContributionReceiptRegistry,
+    ));
+    $container->afterResolving(RenderHookRegistry::class, static function (RenderHookRegistry $registry) use ($extensionFactory): void {
+        $registry->contribute(RenderHookContributionData::extension(
+            location: RenderHookLocation::Footer,
+            extension: $extensionFactory('default'),
+            owner: 'capell-app/navigation',
+            key: 'foundation-header-navigation-default',
+        ));
+    });
+    $container->afterResolving(RenderHookRegistry::class, static function (RenderHookRegistry $registry) use ($container, $extensionFactory): void {
+        $container->make(FrontendHookRegistrar::class)->contribute(
+            location: RenderHookLocation::Footer,
+            extension: $extensionFactory('default'),
+            owner: 'capell-app/navigation',
+            key: 'foundation-header-navigation-default',
+        );
+    });
+
+    $registry = $container->make(RenderHookRegistry::class);
+
+    expect($registry->get(RenderHookLocation::Footer))->toHaveCount(1);
+
+    expect(function () use ($container, $extensionFactory): void {
+        $container->make(FrontendHookRegistrar::class)->contribute(
+            location: RenderHookLocation::Footer,
+            extension: $extensionFactory('changed'),
+            owner: 'capell-app/navigation',
+            key: 'foundation-header-navigation-default',
+        );
+    })->toThrow(LogicException::class, 'foundation-header-navigation-default');
 });
 
 it('resolves class-string extensions from the current container scope', function (): void {
@@ -204,6 +337,15 @@ it('keeps legacy string render hook registration as inline blade for compatibili
         ->toBe(RenderHookRegistrationType::LegacyString->value);
 });
 
+it('adapts legacy numeric priority registration through position adapters', function (): void {
+    $registry = new RenderHookRegistry;
+
+    $registry->register(RenderHookLocation::Footer, '<span>low</span>', 20);
+    $registry->register(RenderHookLocation::Footer, '<span>high</span>', 10);
+
+    expect($registry->renderAll(RenderHookLocation::Footer))->toBe('<span>high</span><span>low</span>');
+});
+
 it('passes mutable main content context through filtered hooks', function (): void {
     $registry = new RenderHookRegistry;
     $contextData = new MainContentRenderHookData(
@@ -237,4 +379,48 @@ it('passes mutable main content context through filtered hooks', function (): vo
         ->and($contextData->slotRendered)->toBeTrue()
         ->and($contextData->pageContentWidgetRendered)->toBeTrue()
         ->and($registry->renderAll(RenderHookLocation::MainContent, $contextData))->toBe('');
+});
+
+it('interleaves keyed hooks with relative positions and reports collisions', function (): void {
+    $registry = new RenderHookRegistry;
+    $registry->contribute(RenderHookContributionData::inlineBlade(
+        RenderHookLocation::Footer,
+        '<span>a</span>',
+        'vendor/a',
+        'a',
+        position: ExtensionPosition::priority(10),
+        source: 'existing-render-hook-source',
+    ));
+    $registry->contribute(RenderHookContributionData::inlineBlade(
+        RenderHookLocation::Footer,
+        '<span>b</span>',
+        'vendor/b',
+        'b',
+        position: ExtensionPosition::before('a'),
+    ));
+
+    expect($registry->renderAll(RenderHookLocation::Footer))->toBe('<span>b</span><span>a</span>');
+    expect(function () use ($registry): void {
+        $registry->contribute(RenderHookContributionData::inlineBlade(
+            RenderHookLocation::Footer,
+            '<span>collision</span>',
+            'vendor/c',
+            'a',
+            source: 'incoming-render-hook-source',
+        ));
+    })->toThrow(LogicException::class, 'Extension key [a] is already registered by [vendor/a] (existing-render-hook-source); [vendor/c] (incoming-render-hook-source) cannot replace it implicitly.');
+});
+
+it('supports explicit replacement and frozen render hooks', function (): void {
+    $registry = new RenderHookRegistry;
+    $registry->contribute(RenderHookContributionData::inlineBlade(RenderHookLocation::Footer, '<span>old</span>', 'vendor/a', 'item'));
+    $registry->replaceContribution(RenderHookContributionData::inlineBlade(RenderHookLocation::Footer, '<span>new</span>', 'vendor/a', 'item'));
+
+    expect($registry->renderAll(RenderHookLocation::Footer))->toBe('<span>new</span>');
+
+    $registry->freeze();
+    expect(function () use ($registry): void {
+        $registry->contribute(RenderHookContributionData::inlineBlade(RenderHookLocation::Footer, '<span>late</span>', 'vendor/b', 'late'));
+    })
+        ->toThrow(LogicException::class, 'frozen');
 });
