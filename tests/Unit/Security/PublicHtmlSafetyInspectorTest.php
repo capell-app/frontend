@@ -333,7 +333,7 @@ describe('baked session-bound CSRF markers', function (): void {
     // A CSRF token is bound to whoever's session happened to render the
     // response. If it reaches a page that can enter the shared HTML cache,
     // every later visitor is served that one visitor's token and every
-    // subsequent submission fails Laravel's CSRF check (CAP-0216/CAP-0233).
+    // subsequent submission fails Laravel's CSRF check.
     // This is a cache-eligibility signal, not an authoring-surface leak: a
     // single-visitor fragment response legitimately contains a real token,
     // so it is checked via a dedicated method, never via
@@ -518,4 +518,13 @@ describe('baked session-bound CSRF markers', function (): void {
 
         expect($inspector->containsBakedCsrfToken('<input type="hidden" name="_tokenized" value="abc123">'))->toBeFalse();
     });
+});
+
+it('allows semantic agent islands but rejects authoring payloads and undeclared agent markers', function (): void {
+    $inspector = new PublicHtmlSafetyInspector;
+    expect($inspector->containsAuthoringSurface('<script type="application/ld+json" data-capell-agent-schema>{"@type":"Product","name":"Public product"}</script>'))->toBeFalse()
+        ->and($inspector->containsAuthoringSurface('<script type="application/json" data-capell-agent-tools>{"capellAgentSchema":1,"tools":[]}</script>'))->toBeFalse()
+        ->and($inspector->containsAuthoringSurface('<script type="application/json" data-capell-agent-tools>{"model_id":42}</script>'))->toBeTrue()
+        ->and($inspector->containsAuthoringSurface('<script type="application/ld+json" data-capell-agent-schema>{"field_path":"secret"}</script>'))->toBeTrue()
+        ->and($inspector->containsAuthoringSurface('<script data-capell-agent-admin>{}</script>'))->toBeTrue();
 });
