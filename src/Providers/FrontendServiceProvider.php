@@ -12,6 +12,7 @@ use Capell\Core\Contracts\RuntimeRefreshWarmer;
 use Capell\Core\Contracts\Themes\ThemePreviewRendererInterface;
 use Capell\Core\Data\VendorAssetData;
 use Capell\Core\Enums\FrontendRuntime;
+use Capell\Core\Events\InstalledRuntimeRefreshed;
 use Capell\Core\Facades\CapellCore;
 use Capell\Core\Octane\Resettable;
 use Capell\Core\Support\Extensions\ExtensionContributionReceiptRegistry;
@@ -178,6 +179,7 @@ use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Cache\Repository;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Container\Container as LaravelContainer;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Filesystem\Filesystem;
@@ -416,6 +418,17 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
                     ->by($request->getHost() . '|' . $request->ip()),
             );
         });
+
+        // Resolve optional middleware after provider boot and late installation,
+        // including when an existing route has already consumed its group.
+        $refreshFrontendMiddleware = static function (): void {
+            resolve(Router::class)->middlewareGroup(
+                'capell-frontend',
+                resolve(FrontendRouteMiddlewareRegistry::class)->all(),
+            );
+        };
+        $this->app->booted($refreshFrontendMiddleware);
+        $this->app->make(Dispatcher::class)->listen(InstalledRuntimeRefreshed::class, $refreshFrontendMiddleware);
         Blade::component(FrontendLayout::class, 'capell::layout');
         $this->registerMiddlewareAliases();
         $this->registerErrorViewFallbackPath();
@@ -631,6 +644,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
         // the prebuilt capell-frontend assets alongside framework + Filament assets.
         $this->publishes([
             $this->package->basePath('/../publishes/build') => public_path('vendor/capell-frontend'),
+            $this->package->basePath('/../publishes/capell-logo.svg') => public_path('capell-logo.svg'),
         ], ['capell-frontend-assets', 'laravel-assets']);
 
         $this->publishes([

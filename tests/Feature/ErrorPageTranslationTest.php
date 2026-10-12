@@ -5,8 +5,10 @@ declare(strict_types=1);
 use Capell\Core\Models\Language;
 use Capell\Core\Models\SiteDomain;
 use Capell\Core\Support\Creator\PageCreator;
+use Capell\Tests\Support\OwnedApplicationPaths;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Lang;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
@@ -124,4 +126,20 @@ it('seeds the error page with the headline the rendered 404 copy uses', function
     expect($errorPage->name)->toBe(__('capell::generic.error_404_headline'))
         ->and($translation->title)->toBe(__('capell::generic.error_404_headline'))
         ->and($statusCopy)->toBe(__('capell::generic.error_404_headline'));
+});
+
+it('publishes the fallback error logo with the frontend assets', function (): void {
+    $workspace = new OwnedApplicationPaths(app());
+    try {
+        expect(Artisan::call('vendor:publish', ['--tag' => 'capell-frontend-assets', '--force' => true]))->toBe(0);
+        $logo = public_path('capell-logo.svg');
+        expect($logo)->toBeFile();
+        $svg = simplexml_load_file($logo);
+        expect($svg)->not->toBeFalse();
+        throw_if($svg === false, RuntimeException::class, 'Published logo is not valid XML.');
+        expect($svg->getName())->toBe('svg')
+            ->and((string) renderNotFoundResponse()->getContent())->toContain(asset('capell-logo.svg'));
+    } finally {
+        $workspace->restore();
+    }
 });
