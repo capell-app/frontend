@@ -15,6 +15,7 @@ use Capell\Frontend\Contracts\FrontendContextReader;
 use Capell\Frontend\Contracts\FrontendResourcePlanRenderer;
 use Capell\Frontend\Contracts\FrontendResponseRenderer;
 use Capell\Frontend\Contracts\FrontendSettingsReaderInterface;
+use Capell\Frontend\Contracts\PublicLayoutRenderPreparer;
 use Capell\Frontend\Data\Assets\FrontendResourcePlanData;
 use Capell\Frontend\Data\FrontendRenderContextData;
 use Capell\Frontend\Data\FrontendResourceContextData;
@@ -26,16 +27,18 @@ use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\HtmlString;
-use Livewire\Blaze\Blaze;
+use Override;
 use Symfony\Component\HttpFoundation\Response;
 
 final class BladeFrontendResponseRenderer implements FrontendResponseRenderer
 {
+    #[Override]
     public function runtime(): FrontendRuntime
     {
         return FrontendRuntime::Blade;
     }
 
+    #[Override]
     public function render(FrontendRenderContextData $context): Response|Responsable
     {
         if (App::bound('capell.frontend.page-markdown-response')) {
@@ -64,13 +67,21 @@ final class BladeFrontendResponseRenderer implements FrontendResponseRenderer
         RenderPageRecordDataAction::run($page, []);
         $this->primePublicRenderDependencies($context, $runtimeManifest);
 
-        $response = resolve(PublicViewQueryGuard::class)->guard($context, function () use ($context, $page, $runtimeManifest): Response {
-            $slot = $this->hydratedLayoutGraphSlot($context)
-                ?? $this->layoutBuilderSlot($context)
-                ?? View::make($this->masterFile($context->layout), [
-                    'componentName' => 'capell.frontend.page',
-                    'params' => [],
-                ])->render();
+        $hasAuthoredMaster = $this->hasAuthoredMasterForPreparedGraph($context);
+        $preparedSlot = $hasAuthoredMaster ? null : $this->hydratedLayoutGraphSlot($context);
+
+        if (! $hasAuthoredMaster && $preparedSlot === null && $this->layoutHasContainers($context->layout)
+            && App::bound(PublicLayoutRenderPreparer::class)) {
+            App::make(PublicLayoutRenderPreparer::class)->prepare($context);
+        }
+
+        $response = PublicRenderDataScope::during($context->publicRenderData, fn () => resolve(PublicViewQueryGuard::class)->guard($context, function () use ($context, $page, $runtimeManifest, $hasAuthoredMaster, $preparedSlot): Response {
+            $slot = $hasAuthoredMaster ? null : ($preparedSlot ?? $this->layoutBuilderSlot($context));
+
+            $slot ??= View::make($this->masterFile($context->layout), [
+                'componentName' => 'capell.frontend.page',
+                'params' => [],
+            ])->render();
 
             return response()->view(
                 $this->layoutFile($context->layout),
@@ -90,7 +101,7 @@ final class BladeFrontendResponseRenderer implements FrontendResponseRenderer
                 ],
                 $context->status ?? 200,
             );
-        });
+        }));
 
         AssertPublicRenderContractAction::run($response);
 
@@ -107,30 +118,26 @@ final class BladeFrontendResponseRenderer implements FrontendResponseRenderer
         return $layout?->meta['master_file'] ?? 'capell::livewire.page.page';
     }
 
+    private function hasAuthoredMasterForPreparedGraph(FrontendRenderContextData $context): bool
+    {
+        $masterFile = $context->layout?->meta['master_file'] ?? null;
+
+        return is_object($context->publicRenderData?->layoutGraph)
+            && is_string($masterFile)
+            && trim($masterFile) !== '';
+    }
+
     private function layoutBuilderSlot(FrontendRenderContextData $context): ?string
     {
         if (! $this->layoutHasContainers($context->layout)) {
             return null;
         }
 
-        if (! app()->bound('blaze')) {
-            return Blade::render('<x-capell::layout />', [
-                '__env' => resolve(Factory::class),
-            ]);
-        }
-
-        $wasBlazeEnabled = Blaze::isEnabled();
-        Blaze::disable();
-
-        try {
-            return Blade::render('<x-capell::layout />', [
-                '__env' => resolve(Factory::class),
-            ]);
-        } finally {
-            if ($wasBlazeEnabled) {
-                Blaze::enable();
-            }
-        }
+        // Keep compilation in the caller's mode: these views can already be
+        // cached with Blaze calls from chrome preparation or an earlier render.
+        return Blade::render('<x-capell::layout />', [
+            '__env' => resolve(Factory::class),
+        ]);
     }
 
     private function hydratedLayoutGraphSlot(FrontendRenderContextData $context): ?string
@@ -141,26 +148,19 @@ final class BladeFrontendResponseRenderer implements FrontendResponseRenderer
             return null;
         }
 
-        $sections = collect(data_get($layoutGraph, 'containers', []))
-            ->flatMap(
-                fn (mixed $container): array => collect(data_get($container, 'widgets', []))
-                    ->flatMap(
-                        fn (mixed $widget): array => collect(data_get($widget, 'data.sections', []))
-                            ->sortBy(static fn (mixed $section): int => is_array($section) && is_numeric($section['order'] ?? null) ? (int) $section['order'] : PHP_INT_MAX)
-                            ->values()
-                            ->all(),
-                    )
-                    ->all(),
-            )
-            ->filter(fn (mixed $section): bool => is_array($section) && is_string($section['html'] ?? null) && trim($section['html']) !== '')
-            ->map(fn (array $section): string => (string) $section['html'])
-            ->values();
+        // Public graph producers may omit container metadata. Consult the original
+        // layout too, and let the layout renderer preserve container presentation.
+        foreach (collect($context->layout?->getAttribute('containers') ?? [])
+            ->concat(collect(data_get($layoutGraph, 'containers', []))) as $container) {
+            $meta = data_get($container, 'meta', []);
 
-        if ($sections->isEmpty()) {
-            return null;
+            // A main landmark label has no container presentation to preserve.
+            if (is_array($meta) && $meta !== [] && $meta !== ['landmark' => 'main']) {
+                return null;
+            }
         }
 
-        return $sections->implode("\n");
+        return new PreparedLayoutGraph($layoutGraph)->html();
     }
 
     private function primePublicRenderDependencies(FrontendRenderContextData $context, FrontendRuntimeManifestData $runtimeManifest): void

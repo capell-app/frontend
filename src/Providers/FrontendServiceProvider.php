@@ -15,6 +15,7 @@ use Capell\Core\Enums\FrontendRuntime;
 use Capell\Core\Events\InstalledRuntimeRefreshed;
 use Capell\Core\Facades\CapellCore;
 use Capell\Core\Octane\Resettable;
+use Capell\Core\Support\Extensions\ExtensionContributionReceiptContext;
 use Capell\Core\Support\Extensions\ExtensionContributionReceiptRegistry;
 use Capell\Core\Support\Extensions\ExtensionOrderingAudit;
 use Capell\Core\Support\Migration\MigrationFilesystem;
@@ -419,16 +420,17 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
             );
         });
 
-        // Resolve optional middleware after provider boot and late installation,
-        // including when an existing route has already consumed its group.
-        $refreshFrontendMiddleware = static function (): void {
+        // Resolve optional integrations after provider boot and late installation,
+        // including middleware groups already consumed by an existing route.
+        $refreshFrontendRuntime = static function (): void {
             resolve(Router::class)->middlewareGroup(
                 'capell-frontend',
                 resolve(FrontendRouteMiddlewareRegistry::class)->all(),
             );
+            resolve(FrontendEventBootstrapper::class)->refresh();
         };
-        $this->app->booted($refreshFrontendMiddleware);
-        $this->app->make(Dispatcher::class)->listen(InstalledRuntimeRefreshed::class, $refreshFrontendMiddleware);
+        $this->app->booted($refreshFrontendRuntime);
+        $this->app->make(Dispatcher::class)->listen(InstalledRuntimeRefreshed::class, $refreshFrontendRuntime);
         Blade::component(FrontendLayout::class, 'capell::layout');
         $this->registerMiddlewareAliases();
         $this->registerErrorViewFallbackPath();
@@ -691,12 +693,20 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
         $this->callAfterResolving(
             RenderHookRegistry::class,
             function (): void {
-                $this->app->make(FrontendHookRegistrar::class)->contribute(
-                    RenderHookLocation::HeadClose,
-                    ThemeTokenHeadCloseHook::class,
-                    owner: self::$packageName,
-                    key: 'theme-token-css',
-                );
+                $receipts = $this->app->make(ExtensionContributionReceiptRegistry::class);
+                $contexts = $receipts->providerContexts(self::class);
+                // Direct provider registration may not retain manifest receipt contexts.
+                $contexts = $contexts !== [] ? $contexts : [
+                    ExtensionContributionReceiptContext::foundation(self::$packageName, 'frontend', self::class),
+                ];
+                $receipts->withContexts($contexts, function (): void {
+                    $this->app->make(FrontendHookRegistrar::class)->contribute(
+                        RenderHookLocation::HeadClose,
+                        ThemeTokenHeadCloseHook::class,
+                        owner: self::$packageName,
+                        key: 'theme-token-css',
+                    );
+                });
             },
         );
 
