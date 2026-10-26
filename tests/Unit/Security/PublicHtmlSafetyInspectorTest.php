@@ -24,6 +24,8 @@ it('detects frontend authoring markers in public html', function (string $html):
     '<button data-capell-editor-url="https://example.com/admin/pages/1/edit?signature=abc">Edit</button>',
     '<div class="capell-editor">Edit</div>',
     '<script type="application/json">{"field_path":"content.blocks.0.title"}</script>',
+    '<script type="application/json">{"__capell":{"instance_id":"editor-instance","state_version":1}}</script>',
+    '<div data-state="{&quot;__capell&quot;:{&quot;state_version&quot;:1}}"></div>',
     '<script type = "application/json">{"model_id":42}</script>',
     '<script>window.capellPreview = {"model_id":42}</script>',
     '<script>window.capellPreview = {model_id: 42}</script>',
@@ -527,4 +529,10 @@ it('allows semantic agent islands but rejects authoring payloads and undeclared 
         ->and($inspector->containsAuthoringSurface('<script type="application/json" data-capell-agent-tools>{"model_id":42}</script>'))->toBeTrue()
         ->and($inspector->containsAuthoringSurface('<script type="application/ld+json" data-capell-agent-schema>{"field_path":"secret"}</script>'))->toBeTrue()
         ->and($inspector->containsAuthoringSurface('<script data-capell-agent-admin>{}</script>'))->toBeTrue();
+});
+
+it('distinguishes runtime asset wiring from authoring state in diagnostic search matches', function (): void {
+    $inspector = new PublicHtmlSafetyInspector;
+    expect($inspector->containsAuthoringSurface('<div data-capell-widget-assets="example">Public widget</div>'))->toBeFalse()
+        ->and($inspector->containsAuthoringSurface('<div data-capell-authoring="page:1" hidden>Editor</div>'))->toBeTrue();
 });

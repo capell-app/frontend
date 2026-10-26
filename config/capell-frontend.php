@@ -31,6 +31,7 @@ return [
     'public_render_data_cache' => env('CAPELL_PUBLIC_RENDER_DATA_CACHE', true),
     'minify_html' => env('CAPELL_MINIFY_HTML', true),
     'cache_skip_authenticated' => true,
+    // Dedicated managed export directory: privacy repair removes untracked legacy HTML here.
     'static_artifacts_path' => env('CAPELL_FRONTEND_STATIC_ARTIFACTS_PATH'),
     'public_html_authoring_markers' => [],
     /*
@@ -46,13 +47,13 @@ return [
      *                 name is only allowed when its first segment appears here
      *                 (e.g. prefix "pages" permits "pages.about" from /pages/about).
      *
-     * Single-segment, author-authored top-level views (e.g. /about -> "about") remain
-     * allowed by default. Namespaced names ("::"), traversal ("..") and control
-     * characters are always rejected.
+     * Both path and route-name fallbacks are closed by default, including top-level
+     * views. Namespaced names ("::"), traversal ("..") and control characters are
+     * always rejected.
      */
     'fallback_public_views' => [
         'view_names' => [],
-        'prefixes' => ['pages'],
+        'prefixes' => [],
     ],
     'public_view_query_guard' => [
         'enabled' => env('CAPELL_FRONTEND_PUBLIC_VIEW_QUERY_GUARD_ENABLED', true),
