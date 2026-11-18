@@ -2,7 +2,7 @@
 
 This document explains how Tailwind assets are collected across Capell packages/providers and how the generator produces a single CSS directive file used by Tailwind.
 
-## Overview
+## Where Tailwind inputs come from
 
 Capell aggregates Tailwind asset declarations from multiple sources so your Tailwind build has a unified set of inputs:
 
@@ -128,7 +128,7 @@ class MyPackageServiceProvider extends ServiceProvider
 
 ### Registry Methods
 
-| Method                  | Signature                                                                       | Behavior                                                                                                                       |
+| Method                  | Signature                                                                       | Behaviour                                                                                                                      |
 | ----------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `registerSource()`      | `registerSource(string $source, ?string $origin = null): self`                  | Register a single `@source` glob. Strings are trimmed; empty strings ignored.                                                  |
 | `registerSources()`     | `registerSources(array $sources, ?string $origin = null): self`                 | Register multiple sources at once. Convenience wrapper.                                                                        |

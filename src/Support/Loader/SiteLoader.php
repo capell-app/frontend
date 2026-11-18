@@ -82,6 +82,10 @@ class SiteLoader
                 ->get();
         });
 
+        if ($sites->isEmpty()) {
+            return $sites;
+        }
+
         $siteLanguages = SiteLoader::languages();
         /** @var \Illuminate\Support\Collection<int, Language> $languagesById */
         $languagesById = $siteLanguages->keyBy('id');
@@ -166,7 +170,7 @@ class SiteLoader
      */
     public static function pageLanguages(Site $site, Language $language, Pageable $page): array
     {
-        $key = CacheEnum::pageLanguages($page->id, $language->id);
+        $key = CacheEnum::pageLanguages($page->getMorphClass(), $page->id, $language->id);
 
         return CapellCore::rememberCache($key, function () use ($site, $language, $page): array {
             $siteLanguages = SiteLoader::languages();

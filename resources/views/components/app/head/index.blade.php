@@ -6,13 +6,16 @@
 ])
 
 @php
+    use Capell\Core\Enums\AiDisclosure;
     use Capell\Core\Enums\MediaConversionEnum;
+    use Capell\Core\Enums\SiteAiDisclosure;
     use Capell\Core\Models\Language;
     use Capell\Core\Models\PageUrl;
     use Capell\Core\Models\SiteDomain;
     use Illuminate\Database\Eloquent\Collection as EloquentCollection;
     use Illuminate\Database\Eloquent\Model;
     use Capell\Frontend\Actions\BuildHeadMetadataAction;
+    use Capell\Frontend\Actions\ResolveHeadImageUrlAction;
     use Capell\Frontend\Actions\ResolvePageCanonicalUrlAction;
     use Capell\Frontend\Actions\ResolvePageRobotsDirectivesAction;
     use Capell\Frontend\Actions\RenderCustomHeadAction;
@@ -94,6 +97,11 @@
     $description = $safeStringAttribute($pageTranslation, 'meta_description');
 
     $keywords = $safeStringAttribute($pageTranslation, 'meta_keywords');
+    // Read from already-loaded site and page meta: no query, and only the disclosure word is output.
+    $aiDisclosure = ($siteMeta[SiteAiDisclosure::META_KEY] ?? null) === SiteAiDisclosure::Marker->value
+        ? AiDisclosure::tryFrom((string) ($pageMeta[AiDisclosure::PAGE_META_KEY] ?? ''))
+        : null;
+    $aiDisclosure = $aiDisclosure === AiDisclosure::None ? null : $aiDisclosure;
 
     $fonts = PublicModelMeta::get($theme, 'fonts');
 
@@ -187,6 +195,8 @@
 
     @php
         $collector = new HeadMetadataCollector;
+        // Rendered first, so runtimes defined here (such as window.CapellPrivacy) exist before any other head script.
+        $headOpenHook = $collector->collect(app(RenderHookRegistry::class)->renderAll(RenderHookLocation::HeadOpen, item: ['page' => $page, 'site' => $site, 'language' => $language]));
         $resourceHead = $collector->collect($renderedFrontendResources instanceof RenderedFrontendResourcesData ? $renderedFrontendResources->headHtml : '');
         $stylesHead = $collector->collect($__env->yieldPushContent('styles'));
         $headHook = $collector->collect(app(RenderHookRegistry::class)->renderAll(RenderHookLocation::HeadClose, item: ['page' => $page, 'site' => $site, 'language' => $language], scenario: RenderHookScenario::SeoMeta->value));
@@ -195,8 +205,9 @@
         $pageHead = $collector->collect(HeadContentSanitizer::headSnippet(data_get($pageMeta, 'meta_tags')));
         $customHead = $collector->collect(RenderCustomHeadAction::run($title, $description, $keywords));
         $sectionHead = $collector->collect($__env->yieldContent('meta'));
-        $headMetadata = BuildHeadMetadataAction::run($socialTitle, $description, $canonicalUrl, $safeStringAttribute($siteTranslation, 'title'), $robots, Frontend::isError(), $collector->values());
+        $headMetadata = BuildHeadMetadataAction::run($socialTitle, $description, $canonicalUrl, $safeStringAttribute($siteTranslation, 'title'), $robots, Frontend::isError(), $collector->values(), ResolveHeadImageUrlAction::run($page, $site));
     @endphp
+    {!! $headOpenHook !!}
     <title>{{ $metaTitle }}</title>
     @foreach ($headMetadata->meta as $key => $value)
         <meta
@@ -435,6 +446,13 @@
         <meta
             name="keywords"
             content="{{ strip_tags($keywords) }}"
+        />
+    @endif
+
+    @if ($aiDisclosure !== null)
+        <meta
+            name="ai-disclosure"
+            content="{{ $aiDisclosure->value }}"
         />
     @endif
 

@@ -14,6 +14,8 @@ use Capell\Core\Data\VendorAssetData;
 use Capell\Core\Enums\FrontendRuntime;
 use Capell\Core\Events\InstalledRuntimeRefreshed;
 use Capell\Core\Facades\CapellCore;
+use Capell\Core\Models\Page;
+use Capell\Core\Models\PageUrl;
 use Capell\Core\Octane\Resettable;
 use Capell\Core\Support\Extensions\ExtensionContributionReceiptContext;
 use Capell\Core\Support\Extensions\ExtensionContributionReceiptRegistry;
@@ -21,6 +23,7 @@ use Capell\Core\Support\Extensions\ExtensionOrderingAudit;
 use Capell\Core\Support\Migration\MigrationFilesystem;
 use Capell\Core\Support\Migration\MigrationFilesystemInterface;
 use Capell\Core\Support\Packages\AbstractPackageServiceProvider;
+use Capell\Core\Support\Privacy\ConsentSettings;
 use Capell\Core\Support\Registries\TaggedProviderRegistry;
 use Capell\Core\Support\Settings\SettingsGroupMetadata;
 use Capell\Core\Support\Themes\LayoutViewRegistry;
@@ -32,6 +35,7 @@ use Capell\Frontend\Actions\GetLayoutContainerWidthAction;
 use Capell\Frontend\Actions\WarmCriticalFrontendPagesAction;
 use Capell\Frontend\Console\Commands\AfterInstallCommand;
 use Capell\Frontend\Console\Commands\DiagnoseErrorPagesCommand;
+use Capell\Frontend\Console\Commands\FlushFragmentCacheCommand;
 use Capell\Frontend\Console\Commands\GenerateErrorPagesCommand;
 use Capell\Frontend\Console\Commands\GenerateHtmlCommand;
 use Capell\Frontend\Console\Commands\GenerateTailwindAssetsCommand;
@@ -87,6 +91,7 @@ use Capell\Frontend\Support\Assets\FrontendAssetsService;
 use Capell\Frontend\Support\Assets\FrontendPackageDependencyRegistry;
 use Capell\Frontend\Support\Assets\FrontendResourceRegistry;
 use Capell\Frontend\Support\Assets\FrontendViteInputRegistry;
+use Capell\Frontend\Support\Assets\FrontendVitePluginRegistry;
 use Capell\Frontend\Support\Assets\PublicFrontendAssetUrl;
 use Capell\Frontend\Support\Assets\ThemeMetaAssetContributor;
 use Capell\Frontend\Support\Assets\ViteManifestReader;
@@ -104,8 +109,10 @@ use Capell\Frontend\Support\Cache\PageCacheInvalidator;
 use Capell\Frontend\Support\Cache\PageHydrator;
 use Capell\Frontend\Support\Cache\PageListingCache;
 use Capell\Frontend\Support\Cache\PageModelCache;
+use Capell\Frontend\Support\Cache\PreChangeInvalidationSnapshots;
 use Capell\Frontend\Support\Cache\PublicPageRenderDataCache;
 use Capell\Frontend\Support\Cache\PublicRenderDataCacheDependencyRegistry;
+use Capell\Frontend\Support\Cache\PublicUrlMissCache;
 use Capell\Frontend\Support\Cache\Resolvers\MediaTranslationCacheDependencyResolver;
 use Capell\Frontend\Support\Cache\Resolvers\PageableTranslationCacheDependencyResolver;
 use Capell\Frontend\Support\Cache\Resolvers\SiteTranslationCacheDependencyResolver;
@@ -134,11 +141,14 @@ use Capell\Frontend\Support\Maintenance\MaintenanceManifestStore;
 use Capell\Frontend\Support\Maintenance\MaintenancePagePathResolver;
 use Capell\Frontend\Support\ModelServing\NullRenderedModelTracker;
 use Capell\Frontend\Support\Pagination\StatelessPaginationResolver;
+use Capell\Frontend\Support\Privacy\PrivacyRuntimeRenderHook;
+use Capell\Frontend\Support\Privacy\PrivacyRuntimeScript;
 use Capell\Frontend\Support\Render\BladeFrontendResponseRenderer;
 use Capell\Frontend\Support\Render\FrontendHookRegistrar;
 use Capell\Frontend\Support\Render\FrontendResponseRendererRegistry;
 use Capell\Frontend\Support\Render\HeadMetadataRegistry;
 use Capell\Frontend\Support\Render\LivewireFrontendResponseRenderer;
+use Capell\Frontend\Support\Render\PublicBladeSourceGuard;
 use Capell\Frontend\Support\Render\PublicRenderDataContributorRegistry;
 use Capell\Frontend\Support\Render\PublicViewQueryGuard;
 use Capell\Frontend\Support\Render\RenderHookFragmentRegistry;
@@ -273,6 +283,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
         $this->app->scoped(FrontendResponseRendererRegistry::class);
         $this->app->singleton(StatelessPaginationResolver::class);
         $this->app->scoped(PublicViewQueryGuard::class);
+        $this->app->singleton(PublicBladeSourceGuard::class);
         $this->app->singleton(RenderHookRegistry::class);
         $this->app->singleton(HeadMetadataRegistry::class);
         $this->app->scoped(RenderHookFragmentRegistry::class);
@@ -292,6 +303,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
         }
 
         $this->app->singleton(FrontendHookRegistrar::class);
+        $this->app->singleton(PrivacyRuntimeScript::class);
         $this->app->scoped(ThemeTokenHeadCloseHook::class);
         $this->app->singleton(FrontendEventBootstrapper::class);
         $this->app->singleton(FrontendRuleConditionRegistry::class);
@@ -330,6 +342,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
             ),
         );
         $this->app->scoped(PageCacheInvalidator::class);
+        $this->app->scoped(PreChangeInvalidationSnapshots::class);
         $this->app->alias(PageCacheInvalidator::class, 'capell.frontend.page-cache-invalidator');
         $this->app->scoped(PageListingCache::class);
         $this->app->scoped(PageModelCache::class);
@@ -402,6 +415,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
                 GenerateHtmlCommand::class,
                 GenerateErrorPagesCommand::class,
                 DiagnoseErrorPagesCommand::class,
+                FlushFragmentCacheCommand::class,
                 InvalidateDueScheduledPublicationCachesCommand::class,
             ])
             ->hasConfigFile()
@@ -463,6 +477,8 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
             ->registerSubscribers()
             ->bootstrapFrontendEvents()
             ->registerPublicViewQueryListener()
+            ->registerPublicBladeSourceGuard()
+            ->registerPublicUrlMissInvalidation()
             ->registerScheduledPublicationInvalidation()
             ->registerSettingsSchemas()
             ->registerAgentSchemaHook()
@@ -512,6 +528,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
         );
         $this->app->singleton(FrontendPackageDependencyRegistry::class);
         $this->app->singleton(FrontendViteInputRegistry::class);
+        $this->app->singleton(FrontendVitePluginRegistry::class);
         $this->app->scoped('capell.frontend.resource-group-options', fn (Application $application): callable => static fn (): array => collect($application->make(FrontendResourceRegistry::class)->all())
             ->mapWithKeys(fn (FrontendResourceGroupData $group, string $key): array => [
                 $key => $group->label,
@@ -677,9 +694,34 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
         return $this;
     }
 
+    private function registerPublicUrlMissInvalidation(): self
+    {
+        foreach ([Page::class, PageUrl::class] as $model) {
+            foreach (['saved', 'deleted', 'restored'] as $event) {
+                $model::{$event}(static function (): void {
+                    PublicUrlMissCache::invalidate();
+                });
+            }
+        }
+
+        return $this;
+    }
+
     private function registerSubscribers(): self
     {
         CapellCore::subscriberManager()->subscribe(PurgeCdnCacheOnPageRollbackSubscriber::class);
+
+        return $this;
+    }
+
+    private function registerPublicBladeSourceGuard(): self
+    {
+        $guard = resolve(PublicBladeSourceGuard::class);
+        $guard->registerRoot(dirname(__DIR__, 2) . '/resources/views');
+
+        Blade::prepareStringsForCompilationUsing(
+            static fn (string $source): string => $guard->inspect($source, Blade::getPath()),
+        );
 
         return $this;
     }
@@ -710,12 +752,26 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
                     ExtensionContributionReceiptContext::foundation(self::$packageName, 'frontend', self::class),
                 ];
                 $receipts->withContexts($contexts, function (): void {
-                    $this->app->make(FrontendHookRegistrar::class)->contribute(
+                    $registrar = $this->app->make(FrontendHookRegistrar::class);
+                    $registrar->contribute(
                         RenderHookLocation::HeadClose,
                         ThemeTokenHeadCloseHook::class,
                         owner: self::$packageName,
                         key: 'theme-token-css',
                     );
+
+                    if ($this->app->make(ConsentSettings::class)->runtimeEnabled()) {
+                        // After a consent manager's runtime (Privacy Center uses priority 1), which
+                        // then wins, and before theme and widget scripts that ask for consent.
+                        $registrar->contribute(
+                            RenderHookLocation::HeadOpen,
+                            PrivacyRuntimeRenderHook::class,
+                            owner: self::$packageName,
+                            key: 'privacy-runtime',
+                            priority: 5,
+                            cacheSafe: true,
+                        );
+                    }
                 });
             },
         );
@@ -744,7 +800,7 @@ final class FrontendServiceProvider extends AbstractPackageServiceProvider
             group: 'frontend',
             label: 'capell-admin::generic.frontend_settings',
             icon: Heroicon::OutlinedGlobeAlt,
-            navigationGroup: 'capell-admin::navigation.group_system',
+            navigationGroup: 'settings',
             navigationSort: 92,
             packageName: self::$packageName,
         ));

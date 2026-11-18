@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Capell\Frontend\Support\Cache;
 
+use Capell\Core\Actions\Translations\HydratePageLanguagesAction;
+use Capell\Core\Actions\Translations\ResolveTranslationAction;
 use Capell\Core\Concerns\HasCache;
 use Capell\Core\Contracts\Pageable;
+use Capell\Core\Data\TranslationResolutionData;
 use Capell\Core\Models\Language;
 use Capell\Core\Models\Page;
 use Capell\Core\Models\PageUrl;
@@ -13,6 +16,8 @@ use Capell\Core\Models\Site;
 use Capell\Core\Models\Translation;
 use Capell\Frontend\Contracts\RenderedModelTracker;
 use Capell\Frontend\Enums\CacheEnum;
+use Closure;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 
@@ -37,6 +42,158 @@ final class PageModelCache
         bool $withEvents = true,
         bool $useCache = true,
     ): ?Pageable {
+        return $this->getUsingLoader($type, $id, $site, $language, $withEvents, $useCache, fn (string $modelClass): ?Model => $this->loadModels($modelClass, [$id], $site, $language)->first());
+    }
+
+    /**
+     * Hydrate an ordered set of models with one eager load for all cold IDs, so a
+     * listing costs a constant number of queries however many of its models are cold.
+     * Cache hits still use the same validation, tracking and fallback path as get().
+     *
+     * @param  class-string<Model&Pageable<Model>>  $type
+     * @param  list<int>  $ids
+     * @return Collection<int, Model&Pageable<Model>>
+     */
+    public function getMany(
+        string $type,
+        array $ids,
+        ?Site $site,
+        Language $language,
+        bool $withEvents = true,
+        bool $useCache = true,
+    ): Collection {
+        $loaded = null;
+        $models = new Collection;
+
+        foreach ($ids as $id) {
+            $model = $this->getUsingLoader($type, $id, $site, $language, $withEvents, $useCache, function (string $modelClass) use (&$loaded, $ids, $site, $language, $id): ?Model {
+                // Lazy so a fully warm listing does not perform a batch query.
+                $loaded ??= $this->loadModels($modelClass, $ids, $site, $language, reuseRelations: true);
+
+                return $loaded->get($id);
+            });
+
+            if ($model instanceof Pageable) {
+                $models->push($model);
+            }
+        }
+
+        return $models;
+    }
+
+    /**
+     * Hydrate an ordered set of ancestors with one eager load for all cold IDs.
+     * Cache hits still use the same validation, tracking and fallback path as get().
+     *
+     * @param  list<int>  $ids
+     * @return Collection<int, Page>
+     */
+    public function getAncestors(array $ids, Site $site, Language $language): Collection
+    {
+        $loaded = null;
+        $models = new Collection;
+
+        foreach ($ids as $id) {
+            $model = $this->getUsingLoader(Page::class, $id, $site, $language, true, true, function (string $modelClass) use (&$loaded, $ids, $site, $language, $id): ?Model {
+                // Lazy so a fully warm trail does not perform a batch query.
+                $loaded ??= $this->loadModels($modelClass, $ids, $site, $language, reuseRelations: true);
+
+                return $loaded->get($id);
+            });
+
+            if ($model instanceof Page) {
+                $models->push($model);
+            }
+        }
+
+        return $models;
+    }
+
+    /**
+     * Prepare a breadcrumb trail without filling the full page-model cache with
+     * partial models. Translation and URL selection match fully hydrated reads.
+     *
+     * @param  Collection<int, Page>  $pages
+     * @return Collection<int, Page>
+     */
+    public function prepareAncestors(Collection $pages, Site $site, Language $language): Collection
+    {
+        HydratePageLanguagesAction::make()->handleMany($pages, [$language]);
+
+        foreach ($pages as $page) {
+            $this->setRequestedRelations($page, $language);
+            $served = $this->applyTranslationFallback($page, $language);
+            $this->injectTransientRelations($page, $site, $language, $served);
+        }
+
+        return $pages;
+    }
+
+    /**
+     * Remove the cached entry for a specific model so the next call re-warms it.
+     *
+     * @param  class-string  $type
+     */
+    public function invalidate(string $type, int $id, int $siteId, int $languageId): void
+    {
+        $this->removeCacheKey(CacheEnum::pageModel($type, $id, $siteId, $languageId));
+    }
+
+    /**
+     * @param  class-string<Model&Pageable<Model>>  $modelClass
+     * @param  list<int>  $ids
+     * @return Collection<int, Model&Pageable<Model>>
+     */
+    private function loadModels(string $modelClass, array $ids, ?Site $site, Language $language, bool $reuseRelations = false): Collection
+    {
+        $query = $modelClass::query()->whereKey($ids)->publishedDate();
+
+        if ($site instanceof Site) {
+            $query->where('site_id', $site->id);
+        }
+
+        $relations = $this->canonicalRelations($modelClass, $language->id);
+
+        if ($reuseRelations) {
+            unset($relations['translation'], $relations['pageUrl']);
+        }
+
+        $models = $query->with($relations)->get();
+
+        if ($reuseRelations) {
+            foreach ($models as $model) {
+                $this->setRequestedRelations($model, $language);
+            }
+        }
+
+        HydratePageLanguagesAction::make()->handleMany($models, [$language]);
+
+        return $models->keyBy('id');
+    }
+
+    /** @param Model&Pageable<Model> $model */
+    private function setRequestedRelations(Pageable&Model $model, Language $language): void
+    {
+        $translation = $model->translations->firstWhere('language_id', $language->id);
+        $url = $model->pageUrls->first(fn (PageUrl $url): bool => (int) $url->language_id === (int) $language->id && $url->type === null && $url->status);
+        // Keep the singular relations detached, as in the individual eager load.
+        $model->setRelation('translation', $translation instanceof Translation ? clone $translation : null);
+        $model->setRelation('pageUrl', $url instanceof PageUrl ? (clone $url)->unsetRelation('pageable') : null);
+    }
+
+    /**
+     * @param  class-string<Model&Pageable<Model>>  $type
+     * @param  Closure(class-string<Model&Pageable<Model>>): ?Model  $load
+     */
+    private function getUsingLoader(
+        string $type,
+        int $id,
+        ?Site $site,
+        Language $language,
+        bool $withEvents,
+        bool $useCache,
+        Closure $load,
+    ): ?Pageable {
         $modelClass = Relation::getMorphedModel($type) ?? $type;
 
         if (! is_a($modelClass, Model::class, true) || ! is_a($modelClass, Pageable::class, true)) {
@@ -47,17 +204,9 @@ final class PageModelCache
 
         $fromCache = $useCache;
 
-        $loader = function () use ($modelClass, $id, $site, $language, $withEvents, &$fromCache): ?Pageable {
+        $loader = function () use ($modelClass, $withEvents, &$fromCache, $load): ?Model {
             $fromCache = false;
-            $callback = function () use ($modelClass, $id, $site, $language): ?Pageable {
-                $query = $modelClass::query()->where('id', $id)->publishedDate();
-
-                if ($site instanceof Site) {
-                    $query->where('site_id', $site->id);
-                }
-
-                return $query->with($this->canonicalRelations($modelClass, $language->id))->first();
-            };
+            $callback = fn (): ?Model => $load($modelClass);
 
             if ($withEvents) {
                 return $callback();
@@ -95,24 +244,85 @@ final class PageModelCache
             resolve(RenderedModelTracker::class)->track($model);
         }
 
+        $translationLanguage = $this->applyTranslationFallback($model, $language);
+
         if ($site instanceof Site) {
-            $this->injectTransientRelations($model, $site, $language);
+            $this->injectTransientRelations($model, $site, $language, $translationLanguage);
         } elseif ($model->translation !== null && $model->pageUrl !== null) {
-            $model->translation->setRelation('language', $language);
-            $model->pageUrl->setRelation('language', $language);
+            $model->translation->setRelation('language', $translationLanguage);
+            $model->pageUrl->setRelation('language', $this->urlLanguage($model->pageUrl, $language, $translationLanguage));
         }
 
         return $model;
     }
 
     /**
-     * Remove the cached entry for a specific model so the next call re-warms it.
+     * The cached payload holds every translation row, so a page with no translation in
+     * the requested language takes its configured fallback here, per request, rather
+     * than baking a chain into the cache. The served language's usable URL becomes the
+     * page URL when one exists; otherwise the matched URL stays. Returns the language the
+     * hydrated translation is in, taken from the translation row, never from a URL.
      *
-     * @param  class-string  $type
+     * @param  Model&Pageable<Model>  $model
      */
-    public function invalidate(string $type, int $id, int $siteId, int $languageId): void
+    private function applyTranslationFallback(Pageable $model, Language $language): Language
     {
-        $this->removeCacheKey(CacheEnum::pageModel($type, $id, $siteId, $languageId));
+        $loaded = $model->relationLoaded('translation') ? $model->getRelation('translation') : null;
+
+        if ($loaded instanceof Translation && (int) $loaded->language_id === (int) $language->id) {
+            return $language;
+        }
+
+        $resolution = ResolveTranslationAction::run($model, $language);
+
+        if (! $resolution instanceof TranslationResolutionData) {
+            return $language;
+        }
+
+        $model->setRelation('translation', $resolution->translation);
+
+        if (! $resolution->isFallback()) {
+            return $language;
+        }
+
+        // Canonical at the served language's own URL when it has a usable one; otherwise
+        // the URL that matched stays, so the page keeps a canonical URL.
+        $servedUrl = $model->pageUrls->first(
+            fn (PageUrl $url): bool => (int) $url->language_id === $resolution->servedLanguageId
+                && $url->type === null
+                && $url->status,
+        );
+
+        if ($servedUrl instanceof PageUrl) {
+            $model->setRelation('pageUrl', $servedUrl);
+        }
+
+        // The content's language comes from the translation itself (`translations.language`
+        // is cached with the page), never from whichever URL happens to exist.
+        $served = $resolution->translation->relationLoaded('language')
+            ? $resolution->translation->getRelation('language')
+            : null;
+
+        return $served instanceof Language && (int) $served->id === $resolution->servedLanguageId ? $served : $language;
+    }
+
+    /**
+     * A URL is labelled with its own language: a kept requested-language URL must not
+     * take the fallback content's language.
+     */
+    private function urlLanguage(PageUrl $url, Language $requested, Language $served): Language
+    {
+        if ((int) $url->language_id === (int) $served->id) {
+            return $served;
+        }
+
+        if ((int) $url->language_id === (int) $requested->id) {
+            return $requested;
+        }
+
+        $own = $url->relationLoaded('language') ? $url->getRelation('language') : null;
+
+        return $own instanceof Language ? $own : $requested;
     }
 
     /**
@@ -157,21 +367,26 @@ final class PageModelCache
      * (site object reference, language object reference on child relations).
      */
     /** @param Model&Pageable<Model> $model */
-    private function injectTransientRelations(Pageable $model, Site $site, Language $language): void
+    private function injectTransientRelations(Pageable $model, Site $site, Language $language, Language $translationLanguage): void
     {
         $model->setRelation('site', $site);
 
         if ($model->translation instanceof Translation) {
-            $model->translation->setRelation('language', $language);
+            $model->translation->setRelation('language', $translationLanguage);
         }
 
         if ($model->pageUrl instanceof PageUrl) {
-            $model->pageUrl->setRelation('language', $language);
+            $model->pageUrl->setRelation('language', $this->urlLanguage($model->pageUrl, $language, $translationLanguage));
             $model->pageUrl->setRelation('siteDomain', $site->siteDomains->firstWhere('language_id', $model->pageUrl->language_id));
         }
 
+        // Each URL keeps the language cached with it (`pageUrls.language`): the head's
+        // hreflang cluster labels alternates with it, so the request language would mislabel them.
         $model->pageUrls->each(function (PageUrl $url) use ($site, $language): void {
-            $url->setRelation('language', $language);
+            if (! $url->relationLoaded('language') || ! $url->getRelation('language') instanceof Language) {
+                $url->setRelation('language', $language);
+            }
+
             $url->setRelation('siteDomain', $site->siteDomains->firstWhere('language_id', $url->language_id));
         });
 

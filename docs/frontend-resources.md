@@ -1,6 +1,6 @@
 # Frontend Resources
 
-Capell uses one typed resource graph for application Vite entries, package-published files, trusted CDN resources, inline trusted code, loading strategies, hints, dependency ordering, diagnostics, and optimization. Use this graph for CSS and JavaScript; render hooks are for public markup.
+Capell uses one typed resource graph for application Vite entries, package-published files, trusted CDN resources, inline trusted code, loading strategies, hints, dependency ordering, diagnostics, and optimisation. Use this graph for CSS and JavaScript; render hooks are for public markup.
 
 ![Frontend resources flow from typed declarations through planning and activation to safe public output.](images/frontend-resource-pipeline.svg)
 
@@ -34,6 +34,40 @@ laravel({
 ```
 
 Doctor reports missing integration when generated entries exist.
+
+### Vite plugins from packages
+
+A package whose entry points need a Vite plugin, such as `.vue` files and `@vitejs/plugin-vue`, registers the plugin's npm package name with `FrontendVitePluginRegistry` and declares the package itself through `FrontendPackageDependencyRegistry`:
+
+```php
+$this->callAfterResolving(
+    FrontendVitePluginRegistry::class,
+    static fn (FrontendVitePluginRegistry $registry) => $registry->register(
+        '@vitejs/plugin-vue',
+        'capell-app/inertia-vue-adapter',
+        ['template' => ['transformAssetUrls' => ['base' => null, 'includeAbsolute' => false]]],
+    ),
+);
+```
+
+The build loads every registered plugin through `capellVitePlugins()`. It resolves each package from the application's own `node_modules`, including ESM-only packages, and calls its default export with the registered JSON options. Each plugin is called once, so two packages that register the same plugin must use the same options. Capell adds the helper when it integrates the Vite configuration. An application integrated earlier gets it the next time `capell:frontend-after-install --apply` runs while a package needs a plugin:
+
+```js
+import {
+    capellViteInputs,
+    capellVitePlugins,
+} from './vendor/capell-app/frontend/resources/js/capell-vite-inputs.js'
+
+export default defineConfig({
+    plugins: [capellVitePlugins(), laravel({ input: [...capellViteInputs()] })],
+})
+```
+
+Capell changes the plugins only when a package needs one. It edits only the exported configuration's own `plugins` array, and ignores comments, strings and nested arrays such as PostCSS or Rollup plugins. It stops before writing anything, with a message asking you to add `capellVitePlugins()` yourself, in these cases:
+
+- the configuration is a function;
+- it has no top-level `plugins` array;
+- it imports the helper differently.
 
 ## Published package resources and conditional widgets
 
@@ -105,7 +139,7 @@ Async scripts cannot declare or satisfy ordered dependencies.
 
 Trusted PHP may use `inlineStyle()` and `inlineScript()`; the renderer applies Laravel Vite's nonce. Use typed `FrontendResourceHintData` for preload, module-preload, preconnect, and DNS-prefetch. Capell does not automatically preconnect to external origins.
 
-Plans report required `script-src`, `style-src`, `connect-src`, and `font-src` origins but do not change CSP headers. The application owns CSP authorization and nonce propagation.
+Plans report required `script-src`, `style-src`, `connect-src`, and `font-src` origins but do not change CSP headers. The application owns CSP authorisation and nonce propagation.
 
 Editor-controlled theme data may select trusted registered groups or local public paths. It cannot introduce remote URLs or inline executable code.
 
@@ -119,7 +153,7 @@ Tests should prove presence and absence, dependency order, placement, canonical 
 
 Critical-CSS-eligible stylesheets are rendered with Capell's stable recovery runtime. If the intended full stylesheet fails, the runtime loads the configured stable fallback, marks the document as `data-frontend-styles="fallback"`, and retries the intended URL with bounded cache-busting delays. A successful retry activates the full stylesheet, removes the fallback, marks the document as loaded, and dispatches `capell:stylesheet-recovered`. When more than one eligible stylesheet is present, the fallback remains active until every failed stylesheet has recovered.
 
-The package default fallback is `/vendor/capell-frontend/capell-frontend.css`. It keeps a failed page readable, but an application with a branded frontend bundle should configure `capell-frontend.stylesheet_recovery.fallback_url` to a stable, atomically published full bundle. The runtime is always published at `/vendor/capell-frontend/stylesheet-recovery.js`; keep package assets in the normal `laravel-assets` publication step.
+The package default fallback is `/vendor/capell-frontend/capell-frontend.css`. It keeps a failed page readable, but an application with a branded frontend bundle should configure `capell-frontend.stylesheet_recovery.fallback_url` to a stable, atomically published full bundle. The runtime is inlined in the head by default, so the page makes no blocking request for it and the cached or exported HTML carries no per-response nonce. When your policy enforces `script-src`, add the content hash returned by `StylesheetRecoveryRenderer::cspHashSource()`; the hash changes only when the package runtime changes, so rebuild public HTML caches after upgrading. Set `capell-frontend.stylesheet_recovery.inline` to `false` (`CAPELL_FRONTEND_STYLESHEET_RECOVERY_INLINE`) to keep the external script, which is also served from `/vendor/capell-frontend/stylesheet-recovery.js`; keep package assets in the normal `laravel-assets` publication step.
 
 Recovery is the last safety net, not the release strategy. Content-hashed assets referenced by cacheable HTML must remain available for at least the complete HTML cache and stale-serving window. See [Server Configuration](server-config.md#release-safe-vite-assets).
 

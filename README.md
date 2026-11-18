@@ -69,7 +69,7 @@ Public frontend responses must not expose admin/editor implementation details. B
 
 Frontend authoring must be a post-load admin feature. The public page loads as ordinary HTML; only an authenticated admin beacon response may add edit controls.
 
-When changing public rendering, cache behavior, themes, or beacon integration, keep or add tests that prove anonymous and non-admin responses contain no authoring surface.
+When changing public rendering, cache behaviour, themes, or beacon integration, keep or add tests that prove anonymous and non-admin responses contain no authoring surface.
 
 ![Public/cache delivery separated from authenticated post-load authoring, private preview, and unsafe-to-cache bypass](https://raw.githubusercontent.com/capell-app/capell/main/docs/images/capell-public-authoring-cache-boundary.svg)
 
@@ -79,7 +79,7 @@ Public assertions reject violations by throwing. Optional HTML Cache separately 
 
 Editor-authored rich text must cross a `SafeHtml` boundary before Blade renders it. Build the value with `SafeHtml::sanitize($html, $sanitizer)` (or use `RenderHtmlContentAction`) and output it with normal escaped Blade braces: `{{ $safeHtml }}`. The constructor is private so an arbitrary string cannot be mislabeled as safe HTML.
 
-## Data And Cache Behavior
+## Data And Cache Behaviour
 
 Frontend reads Core records and owns frontend settings. Its main persistence impact is settings state; generated page cache files are owned by optional cache/static packages.
 
@@ -128,16 +128,17 @@ Support covers the dependency ranges above. When an upstream release reaches its
 
 Package development and coordinated verification happen in the [capell-app/capell monorepo](https://github.com/capell-app/capell). Split package repositories are release mirrors; use [docs.capell.app](https://docs.capell.app) for cross-package guidance. See the [contribution guide](https://github.com/capell-app/capell/blob/main/CONTRIBUTING.md), [security policy](https://github.com/capell-app/capell/security/policy), and [licence](https://github.com/capell-app/capell/blob/main/LICENSE.md).
 
-## Further Reading
+## Related guides
 
-| Page                                               | Covers                                                |
-| -------------------------------------------------- | ----------------------------------------------------- |
-| [Frontend overview](docs/overview.md)              | Frontend responsibilities and the package docs index. |
-| [Page and site loading](docs/page-site-loading.md) | Site, page, language, theme, and layout resolution.   |
-| [Security](docs/security.md)                       | Package-specific public rendering safety notes.       |
-| [Server configuration](docs/server-config.md)      | Static-cache fallback and web server routing rules.   |
-| [Tailwind assets](docs/tailwind-assets.md)         | Package Tailwind source and import registration.      |
-| [Render hooks](docs/extending-render-hooks.md)     | Public render hook registration.                      |
-| [Testing frontend](docs/testing-frontend.md)       | Frontend package test patterns.                       |
+| Page                                               | Covers                                                 |
+| -------------------------------------------------- | ------------------------------------------------------ |
+| [Frontend overview](docs/overview.md)              | Frontend responsibilities and the package docs index.  |
+| [Page and site loading](docs/page-site-loading.md) | Site, page, language, theme, and layout resolution.    |
+| [Security](docs/security.md)                       | Package-specific public rendering safety notes.        |
+| [Server configuration](docs/server-config.md)      | Static-cache fallback and web server routing rules.    |
+| [Tailwind assets](docs/tailwind-assets.md)         | Package Tailwind source and import registration.       |
+| [Render hooks](docs/extending-render-hooks.md)     | Public render hook registration.                       |
+| [Privacy consent](docs/privacy-consent.md)         | Asking `window.CapellPrivacy` before loading tracking. |
+| [Testing frontend](docs/testing-frontend.md)       | Frontend package test patterns.                        |
 
 The complete frontend and public-output safety guides are published at [docs.capell.app](https://docs.capell.app).

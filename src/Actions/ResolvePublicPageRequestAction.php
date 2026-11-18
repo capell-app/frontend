@@ -9,30 +9,42 @@ use Capell\Core\Actions\ResolvePublicPageByUrlAction;
 use Capell\Core\Actions\SiteDomains\ResolveSiteDomainUrlAction;
 use Capell\Core\Contracts\Pageable;
 use Capell\Core\Contracts\RedirectResolver;
+use Capell\Core\Data\PublicPageResolutionData;
 use Capell\Core\Data\RedirectDecisionData;
 use Capell\Core\Enums\PageTypeEnum;
 use Capell\Core\Models\Language;
+use Capell\Core\Models\Page;
 use Capell\Core\Models\PageUrl;
 use Capell\Core\Models\Site;
 use Capell\Core\Models\SiteDomain;
 use Capell\Frontend\Data\PageResolutionData;
 use Capell\Frontend\Data\PublicPageResolutionInputData;
+use Capell\Frontend\Support\Cache\PublicUrlMissCache;
 use Capell\Frontend\Support\Loader\PageLoader;
 use Capell\Frontend\Support\Logging\FrontendLogger;
 use Illuminate\Contracts\Database\Eloquent\Builder as BuilderContract;
 use Illuminate\Http\RedirectResponse;
 use Lorisleiva\Actions\Concerns\AsFake;
 use Lorisleiva\Actions\Concerns\AsObject;
+use Symfony\Component\HttpFoundation\Response;
 
 final class ResolvePublicPageRequestAction
 {
     use AsFake;
     use AsObject;
 
+    private const int TRANSLATED_REDIRECT_MAX_AGE = 3600;
+
     public function __construct(private readonly FrontendLogger $logger) {}
 
     public function handle(PublicPageResolutionInputData $input): PageResolutionData
     {
+        $rememberable = $input->revisionPageId === null && ! $input->wildcardAlreadyAttempted;
+
+        if ($rememberable && PublicUrlMissCache::knowsMiss($input->site, $input->language, $input->url)) {
+            return $this->missingPage($input, attemptedWildcard: true);
+        }
+
         $pageUrl = $this->findPageUrl($input->site, $input->language, $input->url);
         $redirect = $this->resolveRedirect($input->site, $input->language, $input->url, $pageUrl);
 
@@ -40,10 +52,16 @@ final class ResolvePublicPageRequestAction
             return new PageResolutionData(page: null, redirect: $redirect);
         }
 
-        $page = $this->resolvePage($input, $pageUrl);
+        $resolution = $this->resolvePage($input, $pageUrl);
 
-        if ($page instanceof Pageable) {
-            return new PageResolutionData(page: $page);
+        if ($resolution->page instanceof Pageable) {
+            return new PageResolutionData(page: $resolution->page);
+        }
+
+        $translatedRedirect = $this->redirectToTranslatedUrl($input, $resolution);
+
+        if ($translatedRedirect instanceof RedirectResponse) {
+            return new PageResolutionData(page: null, redirect: $translatedRedirect);
         }
 
         $wildcardResolution = $this->resolveViaWildcard($input);
@@ -52,13 +70,32 @@ final class ResolvePublicPageRequestAction
             return $wildcardResolution;
         }
 
+        if ($this->pointsAtTrashedPage($input->site, $input->language, $input->url)) {
+            $this->logger->info('[Frontend] URL belonged to a trashed page; answering 410');
+
+            return new PageResolutionData(
+                page: null,
+                attemptedWildcard: $wildcardResolution->attemptedWildcard,
+                gone: true,
+            );
+        }
+
+        if ($rememberable) {
+            PublicUrlMissCache::rememberMiss($input->site, $input->language, $input->url);
+        }
+
+        return $this->missingPage($input, $wildcardResolution->attemptedWildcard);
+    }
+
+    private function missingPage(PublicPageResolutionInputData $input, bool $attemptedWildcard): PageResolutionData
+    {
         if ($input->abortMissingForBot) {
             $this->logger->info('[Frontend] Page not found for bot request; aborting 404');
 
             return new PageResolutionData(
                 page: null,
                 shouldAbort404: true,
-                attemptedWildcard: $wildcardResolution->attemptedWildcard,
+                attemptedWildcard: $attemptedWildcard,
             );
         }
 
@@ -72,18 +109,47 @@ final class ResolvePublicPageRequestAction
             return new PageResolutionData(
                 page: null,
                 shouldAbort404: true,
-                attemptedWildcard: $wildcardResolution->attemptedWildcard,
+                attemptedWildcard: $attemptedWildcard,
             );
         }
 
         return new PageResolutionData(
             page: $errorPage,
-            attemptedWildcard: $wildcardResolution->attemptedWildcard,
+            attemptedWildcard: $attemptedWildcard,
             isErrorPage: true,
         );
     }
 
-    private function resolvePage(PublicPageResolutionInputData $input, ?PageUrl $pageUrl): ?Pageable
+    /**
+     * A path that only ever belonged to a fallback language's page, once that page has a
+     * translation in the requested language, moves permanently to the translated URL
+     * instead of answering not found, so shared links and indexed copies keep working.
+     */
+    private function redirectToTranslatedUrl(PublicPageResolutionInputData $input, PublicPageResolutionData $resolution): ?RedirectResponse
+    {
+        if ($input->revisionPageId !== null || ! $resolution->translatedUrl instanceof PageUrl) {
+            return null;
+        }
+
+        $target = $resolution->translatedUrl->full_url;
+
+        if (! is_string($target) || $target === '') {
+            return null;
+        }
+
+        $query = (string) $input->request?->getQueryString();
+
+        $response = new RedirectResponse($query === '' ? $target : $target . '?' . $query, Response::HTTP_MOVED_PERMANENTLY);
+
+        // Derived from translation state an editor can reverse (removing or disabling the
+        // translation), unlike a stored redirect row an editor chose. A bounded lifetime
+        // keeps browsers and caches from holding a stale move after that.
+        $response->headers->set('Cache-Control', 'public, max-age=' . self::TRANSLATED_REDIRECT_MAX_AGE);
+
+        return $response;
+    }
+
+    private function resolvePage(PublicPageResolutionInputData $input, ?PageUrl $pageUrl): PublicPageResolutionData
     {
         $resolution = ResolvePublicPageByUrlAction::run(
             $input->site,
@@ -107,16 +173,14 @@ final class ResolvePublicPageRequestAction
             );
         }
 
-        if ($resolution->page instanceof Pageable) {
-            return $resolution->page;
+        if (! $resolution->page instanceof Pageable) {
+            $this->logger->info('[Frontend] Page not found; attempting wildcard lookup', [
+                'url' => $input->url,
+                'revisionPageId' => $input->revisionPageId,
+            ]);
         }
 
-        $this->logger->info('[Frontend] Page not found; attempting wildcard lookup', [
-            'url' => $input->url,
-            'revisionPageId' => $input->revisionPageId,
-        ]);
-
-        return null;
+        return $resolution;
     }
 
     private function resolveRedirect(Site $site, Language $language, string $url, ?PageUrl $pageUrl): ?RedirectResponse
@@ -148,6 +212,26 @@ final class ResolvePublicPageRequestAction
 
         // Site URL rewriting would duplicate a resolved mount or replace an external origin.
         return new RedirectResponse($targetUrl, $redirectDecision->statusCode);
+    }
+
+    /**
+     * A page's URLs are soft-deleted with it, so a trashed page leaves its
+     * URLs behind. Restoring the page restores them, which ends the 410.
+     */
+    private function pointsAtTrashedPage(Site $site, Language $language, string $url): bool
+    {
+        $normalizedUrl = $url === '' || $url === '/' ? '/' : '/' . trim($url, '/');
+
+        return PageUrl::onlyTrashed()
+            ->where('site_id', $site->getKey())
+            ->where('language_id', $language->getKey())
+            ->where('url', $normalizedUrl)
+            ->whereHasMorph(
+                'pageable',
+                [Page::class],
+                fn (BuilderContract $query): BuilderContract => $query->onlyTrashed()->where('site_id', $site->getKey()),
+            )
+            ->exists();
     }
 
     private function findPageUrl(Site $site, Language $language, string $url): ?PageUrl

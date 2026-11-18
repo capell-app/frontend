@@ -8,12 +8,17 @@ use Capell\Core\Actions\Activity\RecordActivityBucketAction;
 use Capell\Core\Actions\Activity\RecordActivityVisitorAction;
 use Capell\Core\Actions\SiteDomains\ResolveSiteDomainAction;
 use Capell\Core\Contracts\ActivitySettingsReader;
+use Capell\Core\Contracts\Privacy\ConsentDecisionProvider;
 use Capell\Core\Data\SiteDomains\SiteRequestTargetData;
 use Capell\Core\Enums\ActivityBucketSubjectEnum;
+use Capell\Core\Enums\ConsentCategory;
+use Capell\Core\Enums\ConsentDecision;
 use Capell\Core\Models\Page;
 use Capell\Core\Models\PageUrl;
 use Capell\Core\Models\Site;
 use Capell\Core\Models\SiteDomain;
+use Capell\Core\Support\Privacy\ConsentSettings;
+use Capell\Core\Support\Privacy\DefaultConsentDecisionProvider;
 use Capell\Frontend\Support\Http\CrawlerDetector;
 use Capell\Frontend\Support\Loader\SiteLoader;
 use Illuminate\Http\JsonResponse;
@@ -30,6 +35,8 @@ final class ActivityBeaconController
         private readonly RecordActivityBucketAction $record,
         private readonly RecordActivityVisitorAction $recordVisitor,
         private readonly CrawlerDetector $crawlers,
+        private readonly ConsentDecisionProvider $consent,
+        private readonly ConsentSettings $consentSettings,
     ) {}
 
     public function __invoke(Request $request): JsonResponse
@@ -40,10 +47,16 @@ final class ActivityBeaconController
             return response()->json([], 204);
         }
 
-        if (! $this->settings->collectionEnabled()
-            || $this->crawlers->isCrawler($request->userAgent())
-            || $this->honoursPrivacySignal($request)
-            || $this->rateLimited($request)) {
+        if (! $this->settings->collectionEnabled() || $this->crawlers->isCrawler($request->userAgent())) {
+            return response()->json([], 204);
+        }
+
+        // Granted analytics records the page view and the visitor marker. Undecided records
+        // only the aggregate count, and only under the first-party counter setting.
+        $analytics = $this->analyticsDecision($request);
+        $countsWithoutConsent = $analytics === ConsentDecision::Undecided && $this->consentSettings->firstPartyCounterEnabled();
+
+        if (($analytics !== ConsentDecision::Granted && ! $countsWithoutConsent) || $this->rateLimited($request)) {
             return response()->json([], 204);
         }
 
@@ -88,9 +101,12 @@ final class ActivityBeaconController
             }
 
             $this->record->execute($site, $language, $subject, (string) $pageUrl->getKey());
-            // Runs only after every gate above, so visitors inherit the same
-            // collection setting, crawler filter, privacy signals and rate limit.
-            $this->recordVisitor->execute($site, $language, $request->ip(), $request->userAgent());
+
+            // A visitor marker is a pseudonymous identifier, so it needs granted analytics
+            // on top of every gate above.
+            if ($analytics === ConsentDecision::Granted) {
+                $this->recordVisitor->execute($site, $language, $request->ip(), $request->userAgent());
+            }
 
             return response()->json([], 204);
         } catch (Throwable $throwable) {
@@ -115,13 +131,24 @@ final class ActivityBeaconController
         return $siteDomain;
     }
 
-    private function honoursPrivacySignal(Request $request): bool
+    /**
+     * A Global Privacy Control or Do Not Track signal refuses the counter whatever the provider
+     * decides, as the browser beacon does. A provider that cannot decide is treated as a
+     * refusal, never as consent.
+     */
+    private function analyticsDecision(Request $request): ConsentDecision
     {
-        if ($request->header('DNT') === '1') {
-            return true;
+        if (DefaultConsentDecisionProvider::hasOptOutSignal($request)) {
+            return ConsentDecision::Denied;
         }
 
-        return $request->header('Sec-GPC') === '1';
+        try {
+            return $this->consent->decide(ConsentCategory::Analytics->value, $request);
+        } catch (Throwable $throwable) {
+            report($throwable);
+
+            return ConsentDecision::Denied;
+        }
     }
 
     private function rateLimited(Request $request): bool

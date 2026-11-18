@@ -68,7 +68,7 @@ it('builds public page render data from the resolved frontend render context', f
 
     $language = Language::factory()->createOne(['code' => 'en']);
     $site = Site::factory()->createOne(['language_id' => $language->id]);
-    $theme = Theme::factory()->createOne(['meta' => ['assets' => ['resources/css/app.css']]]);
+    $theme = Theme::factory()->createOne(['key' => 'render-data-theme', 'meta' => ['assets' => ['resources/css/app.css']]]);
     $layout = Layout::factory()->site($site)->create([
         'key' => 'home',
         'containers' => [
@@ -110,6 +110,12 @@ it('builds public page render data from the resolved frontend render context', f
     expect($renderData->page)->toBe($page)
         ->and($renderData->site)->toBe($site)
         ->and($renderData->language)->toBe($language)
+        ->and($renderData->context?->site?->name)->toBe($site->name)
+        ->and($renderData->context?->language?->code)->toBe($language->code)
+        ->and($renderData->context?->layout?->key)->toBe($layout->key)
+        ->and($renderData->context?->theme?->key)->toBe($theme->key)
+        ->and($renderData->context?->page?->name)->toBe($page->name)
+        ->and(json_encode($renderData->context, JSON_THROW_ON_ERROR))->not->toContain('"id"')
         ->and($renderData->runtimeManifest->usesLivewire)->toBeFalse()
         ->and($renderData->resourcePlan->headResources)->toHaveCount(2)
         ->and(collect($renderData->resourcePlan->headResources)

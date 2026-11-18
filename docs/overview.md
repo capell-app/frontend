@@ -17,7 +17,7 @@ Frontend extends these Capell surfaces:
 - Site operations through static HTML cache support, cache invalidation contracts, and Tailwind asset aggregation.
 - Package integration through frontend asset contributors, render hooks, presentation delivery, and public-safe view helpers.
 
-## Why It Matters
+## What Frontend gives developers and teams
 
 - **For developers:** Frontend is the boundary between Capell content records and public HTML. It provides request loading, render context, theme resolution, cache behaviour, Tailwind source registration, public safety contracts, and extension points for packages.
 - **For teams:** Visitors get stable public pages while editors can keep working in Admin. Site operations can verify cache state, theme readiness, and public output safety without exposing admin-only behaviour.
@@ -36,7 +36,7 @@ Select any screenshot to open the full-resolution image.
 
 [Light](images/screenshots/frontend-settings.png) · [Dark](images/screenshots/frontend-settings-dark.png)
 
-Screenshot contract:
+Screenshots:
 
 - Admin index screen: not owned by Frontend. Settings are shown in Admin.
 - Create/edit screen: not owned by Frontend. Content editing is owned by Admin and optional authoring packages.
@@ -110,6 +110,7 @@ Deletion and retention:
 - [Page and site loading](page-site-loading.md)
 - [Public HTML safety](../../../docs/frontend/public-html-safety.md)
 - [Extending render hooks](extending-render-hooks.md)
+- [Privacy consent](privacy-consent.md)
 - [Frontend extensions](../../../docs/packages/frontend-extensions.md)
 - [Presentation delivery](presentation-delivery.md)
 - [Capell Interactions](../../../docs/getting-started/capell-interactions.md)

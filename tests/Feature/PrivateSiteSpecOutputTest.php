@@ -6,6 +6,7 @@ use Capell\Core\Actions\BuildCapellSiteFromSpecAction;
 use Capell\Core\Concerns\HasCache;
 use Capell\Core\Data\SiteSpec\CapellSiteSpecData;
 use Capell\Core\Events\SiteSpecPrivacyRepaired;
+use Capell\Core\Events\SiteSpecPublished;
 use Capell\Core\Models\Page;
 use Capell\Core\Models\Site;
 use Capell\Core\Models\SiteDomain;
@@ -471,7 +472,10 @@ it('makes confidential fragments unreachable despite failed deletion or surrogat
     $fragments->remember('private', static fn (): string => 'CONFIDENTIAL fragment', surrogateKeys: ['site-' . $site->id]);
     $fragments->remember('untagged', static fn (): string => 'CONFIDENTIAL untagged');
 
-    $legacyKeys = $repository->get('fragment:legacy:surrogate:map')['site-' . $site->id];
+    $retainedKey = array_values(array_filter(
+        array_keys($store->all()),
+        static fn (string $key): bool => str_contains($key, ':v2:') && str_contains($key, 'value:') && ($store->all()[$key]['value']['value'] ?? null) === 'CONFIDENTIAL fragment',
+    ))[0];
 
     expect($fragments->remember('private', static fn (): string => 'unexpected'))->toBe('CONFIDENTIAL fragment');
     $store->fragmentDeletionFailure = $failure === 'lock' ? null : $failure;
@@ -482,7 +486,7 @@ it('makes confidential fragments unreachable despite failed deletion or surrogat
     expect($site->fresh()->meta['site_spec_privacy_version'])->toBe(2)
         // The retained bytes are deliberately inaccessible through every reader,
         // including fragments without surrogate membership.
-        ->and($repository->get($legacyKeys[0]))->toBe('CONFIDENTIAL fragment')
+        ->and($repository->get($retainedKey)['value'])->toBe('CONFIDENTIAL fragment')
         ->and($fragments->remember('private', static fn (): string => 'safe'))->toBe('safe')
         ->and($fragments->remember('untagged', static fn (): string => 'safe untagged'))->toBe('safe untagged');
 })->with(['return-false', 'throw', 'lock']);
@@ -525,11 +529,13 @@ it('cannot republish a pre-repair fragment into the active namespace after repai
 
     $fragments = new FragmentCache($repository);
     app()->instance(FragmentCache::class, $fragments);
-    $store->beforeMapWrite = static function () use ($spec): void {
-        BuildCapellSiteFromSpecAction::run($spec, true);
-    };
 
-    $fragments->remember('in-flight', static fn (): string => 'CONFIDENTIAL in flight', surrogateKeys: ['site-' . $site->id]);
+    // The repair completes while this fragment is still being rendered.
+    $fragments->remember('in-flight', static function () use ($spec): string {
+        BuildCapellSiteFromSpecAction::run($spec, true);
+
+        return 'CONFIDENTIAL in flight';
+    }, surrogateKeys: ['site-' . $site->id]);
 
     expect($site->fresh()->meta['site_spec_privacy_version'])->toBe(2)
         ->and($fragments->remember('in-flight', static fn (): string => 'safe'))->toBe('safe');
@@ -546,3 +552,35 @@ function exportPrivateRepairFixture(Site $site, string $host, string $html): arr
 
     return GenerateStaticPageArtifactsAction::run(siteId: $site->id);
 }
+
+it('withdraws cached render data for the whole site when its spec pages are published', function (): void {
+    $site = BuildCapellSiteFromSpecAction::run(confidentialPrivateSiteSpec());
+    SiteDomain::factory()->create(['site_id' => $site->id, 'language_id' => $site->language_id, 'scheme' => 'https', 'domain' => 'publish.test']);
+    $home = $site->pages()->where('name', 'Home')->firstOrFail();
+    $home->load(['translation', 'translations', 'pageUrls.siteDomain', 'layout']);
+
+    $site->load(['translation', 'siteDomains', 'siteDomain', 'theme']);
+    $context = new FrontendRenderContextData(
+        page: $home,
+        site: $site,
+        language: $site->language,
+        layout: $home->layout,
+        theme: $site->theme,
+        runtimeManifest: FrontendRuntimeManifestData::forRenderingStrategy(RenderingStrategyEnum::BladeOnly),
+    );
+    $cache = resolve(PublicPageRenderDataCache::class);
+    $cache->remember($context, fn (): PublicPageRenderData => BuildPublicPageRenderDataAction::run($context));
+    $cache->remember($context, function (): never {
+        throw new RuntimeException('Expected a public render data cache hit before publishing.');
+    });
+
+    event(new SiteSpecPublished($site));
+
+    $rebuilt = false;
+    $cache->remember($context, function () use (&$rebuilt, $context): PublicPageRenderData {
+        $rebuilt = true;
+
+        return BuildPublicPageRenderDataAction::run($context);
+    });
+    expect($rebuilt)->toBeTrue();
+});

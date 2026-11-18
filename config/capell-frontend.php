@@ -65,13 +65,6 @@ return [
         'record_passed' => env('CAPELL_FRONTEND_PUBLIC_RENDER_CONTRACT_RECORD_PASSED', false),
         'record_failed' => env('CAPELL_FRONTEND_PUBLIC_RENDER_CONTRACT_RECORD_FAILED', true),
     ],
-    /*
-     * Compatibility escape hatch for trusted, developer-authored content only.
-     * Keep false for editor-controlled CMS content in production because Blade
-     * directives execute server-side.
-     */
-    'html_content_allowed_attributes' => ['class'],
-
     // Model Event Registration Mode
     // Controls how Capell tracks model events for cache updates.
     // Options:
@@ -140,6 +133,10 @@ return [
         'enabled' => env('CAPELL_FRONTEND_STYLESHEET_RECOVERY_ENABLED', true),
         'fallback_url' => env('CAPELL_FRONTEND_STYLESHEET_FALLBACK_URL', '/vendor/capell-frontend/capell-frontend.css'),
         'runtime_url' => env('CAPELL_FRONTEND_STYLESHEET_RECOVERY_RUNTIME_URL', '/vendor/capell-frontend/stylesheet-recovery.js'),
+        // Inline the runtime so the head has no blocking request for it. Needs the
+        // hash from StylesheetRecoveryRenderer::cspHashSource() in script-src when a
+        // script-src policy is enforced; set false to keep the external script.
+        'inline' => env('CAPELL_FRONTEND_STYLESHEET_RECOVERY_INLINE', true),
     ],
 
     'tailwind' => [
