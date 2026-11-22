@@ -24,9 +24,14 @@ it('keeps public frontend blade views free of query and authoring patterns', fun
 it('covers representative query and cache access forms with the public Blade guard', function (): void {
     $forbiddenPatterns = publicFrontendBladeForbiddenPatterns();
     $representativeForbiddenForms = [
+        'Core model namespace in Blade' => 'use Capell\Core\Models\Page;',
+        'relationship inspection in Blade' => '$page?->relationLoaded ("translation");',
         'Eloquent query builder in Blade' => 'Page::query()->whereKey(1)->first();',
         'DB facade in Blade' => 'DB::table("pages")->where("id", 1)->first();',
         'cache facade in Blade' => 'Cache::remember("page", 60, static fn (): array => []);',
+        'frontend record accessor in Blade' => '$siteMeta = Frontend::site()?->meta;',
+        'record metadata helper in Blade' => '$rounded = PublicModelMeta::get($theme, "rounded_images");',
+        'frontend context service in Blade' => '$site = resolve(FrontendContextReader::class)->site();',
     ];
 
     foreach ($representativeForbiddenForms as $label => $source) {
@@ -162,12 +167,17 @@ function publicFrontendBladeForbiddenPatterns(): array
         'unregistered buffer directive in public Blade' => '/@(?:end)?capellBuffer\b/',
         'Livewire mount directive in public Blade' => '/(?:<livewire:|@livewire\s*\()/i',
         'authored critical CSS partial in public Blade' => '/(?:@include(?:If|When|Unless|First)?\s*\([^)]*critical[-_. ]?css|@component\s*\([^)]*critical[-_. ]?css|<x-[^>\s]*critical[-_.]?css)/i',
+        'Core model namespace in Blade' => '/\bCapell\\\\Core\\\\Models\b/i',
+        'relationship inspection in Blade' => '/(?:->|::)\s*relationLoaded\s*\(/i',
         'Eloquent query builder in Blade' => '/::query\s*\(/',
         'DB facade in Blade' => '/\bDB::/',
         'cache facade in Blade' => '/\bCache::/',
         'auth access in public Blade' => '/\bauth\s*\(/',
         'lazy relationship loading in Blade' => '/->load(?:Missing)?\s*\(/',
         'direct model lookup in Blade' => '/::(?:find|findOrFail|first|firstOrFail)\s*\(/',
+        'frontend record accessor in Blade' => '/\bFrontend::(?:site|page|theme|layout|language)\s*\(/',
+        'record metadata helper in Blade' => '/\b(?:PublicModelMeta|PublicPageRelations)::/',
+        'frontend context service in Blade' => '/\b(?:FrontendContextReader|FrontendState)::class/',
         'authoring marker in public Blade' => '/(?:' . implode('|', array_map(
             fn (string $marker): string => preg_quote($marker, '/'),
             $authoringMarkers,

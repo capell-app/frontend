@@ -7,6 +7,7 @@ namespace Capell\Frontend\Support\Cache;
 use Capell\Core\Concerns\HasCache;
 use Capell\Core\Contracts\Pageable;
 use Capell\Core\Data\PublicRead\PublicReadStampData;
+use Capell\Core\Data\Rendering\FrontendRuntimeManifestData;
 use Capell\Core\Models\Language;
 use Capell\Core\Models\Site;
 use Capell\Core\Support\PublicRead\PublicReadEligibilityState;
@@ -18,7 +19,6 @@ use Capell\Frontend\Contracts\PublicContentWidgetPayloadBuilder;
 use Capell\Frontend\Contracts\RenderedModelTracker;
 use Capell\Frontend\Data\CachedPublicPageRenderData;
 use Capell\Frontend\Data\FrontendRenderContextData;
-use Capell\Frontend\Data\FrontendRuntimeManifestData;
 use Capell\Frontend\Data\PublicPageRenderData;
 use Capell\Frontend\Data\PublicRenderDataContributionMetadataData;
 use Capell\Frontend\Data\RenderedModelIdentitiesData;
@@ -28,6 +28,8 @@ use Capell\Frontend\Support\Render\PublicRenderDataContributorRegistry;
 use Carbon\CarbonInterface;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
+use ReflectionMethod;
+use ReflectionParameter;
 use Throwable;
 
 final class PublicPageRenderDataCache
@@ -173,9 +175,24 @@ final class PublicPageRenderDataCache
         return new CachedPublicPageRenderData($renderData, $capturing->stopCapturingIdentities());
     }
 
+    /**
+     * The stored shape of PublicPageRenderData: its constructor property names
+     * and types. Entries written before the class changed are never read back.
+     */
+    private function renderDataShape(): string
+    {
+        $parameters = new ReflectionMethod(PublicPageRenderData::class, '__construct')->getParameters();
+
+        return hash('xxh128', implode('|', array_map(
+            static fn (ReflectionParameter $parameter): string => $parameter->getName() . ':' . $parameter->getType(),
+            $parameters,
+        )));
+    }
+
     private function contentVersion(FrontendRenderContextData $context, ?PublicRenderDataContributionMetadataData $metadata = null): string
     {
         $values = [
+            $this->renderDataShape(),
             $context->page instanceof Model ? $context->page->updated_at?->getTimestamp() : null,
             $this->translationTimestamp($context->page instanceof Model ? $context->page : null),
             $context->layout?->updated_at?->getTimestamp(),

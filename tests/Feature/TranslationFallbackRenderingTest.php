@@ -161,6 +161,41 @@ it('does not move a fallback slug when the requested language has no domain to m
         ->and($resolution->translatedUrl)->toBeNull();
 });
 
+it('does not move a fallback slug to a requested-language domain that is disabled', function (): void {
+    [$site, $english, $french, , $frenchDomain] = translationFallbackSite(frenchFallsBackToEnglish: true);
+    translationFallbackSitePage($site, [
+        [$english, 'about', 'English about marker'],
+        [$french, 'a-propos', 'Marqueur français'],
+    ]);
+    $frenchDomain->update(['status' => false]);
+    $freshSite = Site::query()->whereKey($site->getKey())->firstOrFail();
+
+    $resolution = ResolvePublicPageByUrlAction::run($freshSite, $french, '/about');
+
+    expect($resolution->found())->toBeFalse()
+        ->and($resolution->translatedUrl)->toBeNull();
+});
+
+it('moves a translated slug permanently before a wildcard page can answer the same path', function (): void {
+    [$site, $english, $french, , $frenchDomain] = translationFallbackSite(frenchFallsBackToEnglish: true);
+    translationFallbackSitePage($site, [
+        [$english, 'docs/about', 'English about marker'],
+        [$french, 'docs-fr/a-propos', 'Marqueur français'],
+    ]);
+    $wildcard = translationFallbackSitePage($site, [[$french, 'docs-wildcard', 'Wildcard marker']]);
+    $wildcard->pageUrls()->where('language_id', $french->getKey())->update(['url' => '/docs/*']);
+    $wildcard->blueprint->update(['meta' => array_replace(is_array($wildcard->blueprint->meta) ? $wildcard->blueprint->meta : [], ['url_params' => ['slug' => 'string']])]);
+
+    $this->get($frenchDomain->full_url . '/docs/about')
+        ->assertStatus(301)
+        ->assertRedirect($frenchDomain->full_url . '/docs-fr/a-propos')
+        ->assertDontSeeText('Wildcard marker body');
+
+    $this->get($frenchDomain->full_url . '/docs/unknown')
+        ->assertOk()
+        ->assertSeeText('Wildcard marker body');
+});
+
 it('gives the translated-slug redirect a bounded lifetime', function (): void {
     [$site, $english, $french, , $frenchDomain] = translationFallbackSite(frenchFallsBackToEnglish: true);
     translationFallbackSitePage($site, [
@@ -235,6 +270,26 @@ it('marks a fallback-served page in the head: served language, noindex, canonica
         ->and(translationFallbackCanonical($response))->toBe($englishDomain->full_url . '/about')
         ->and(translationFallbackHreflangs($response))->toContain('en', 'de')
         ->and(translationFallbackHreflangs($response))->not->toContain('fr');
+});
+
+it('omits a translation on a disabled domain from hreflang and links to its host, and still renders', function (): void {
+    [$site, $english, $french, $englishDomain, $frenchDomain] = translationFallbackSite(frenchFallsBackToEnglish: false);
+    $german = Language::factory()->german()->createOne();
+    SiteDomain::factory()->site($site)->language($german)->createOne([
+        'domain' => 'fallback.example.test', 'scheme' => 'http', 'port' => 8124, 'path' => '/de',
+    ]);
+    translationFallbackSitePage($site, [
+        [$english, 'about', 'English about marker'],
+        [$french, 'a-propos', 'Marqueur français'],
+        [$german, 'ueber', 'Deutsche Seite'],
+    ]);
+    $frenchDomain->update(['status' => false]);
+
+    $response = $this->get($englishDomain->full_url . '/about')->assertOk();
+
+    expect(translationFallbackHreflangs($response))->toContain('en', 'de')
+        ->and(translationFallbackHreflangs($response))->not->toContain('fr')
+        ->and((string) $response->getContent())->not->toContain($frenchDomain->full_url . '/a-propos');
 });
 
 it('names the served language when the fallback page is reached through the requested language URL', function (): void {

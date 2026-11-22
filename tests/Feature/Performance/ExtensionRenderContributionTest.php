@@ -2,9 +2,17 @@
 
 declare(strict_types=1);
 
+use Capell\Core\Contracts\Rendering\FrontendResourceContributor;
+use Capell\Core\Contracts\Rendering\RenderHookExtensionInterface;
 use Capell\Core\Data\RenderableContributionIdentityData;
 use Capell\Core\Data\RenderableDefinitionData;
+use Capell\Core\Data\Rendering\Assets\FrontendResourceContributionData;
+use Capell\Core\Data\Rendering\Assets\FrontendResourceData;
+use Capell\Core\Data\Rendering\FrontendResourceContextData;
+use Capell\Core\Data\Rendering\FrontendRuntimeManifestData;
+use Capell\Core\Data\Rendering\RenderHookContext;
 use Capell\Core\Enums\ExtensionContributionType;
+use Capell\Core\Enums\Rendering\RenderingStrategyEnum;
 use Capell\Core\Models\Page;
 use Capell\Core\Support\Manifest\CapellManifestData;
 use Capell\Core\Support\PackageRegistry\CapellPackageRegistry;
@@ -12,18 +20,10 @@ use Capell\Core\Support\Renderables\RenderableRegistry;
 use Capell\Frontend\Actions\CollectFrontendResourceContributionsAction;
 use Capell\Frontend\Actions\Performance\RecordExtensionRenderContributionAction;
 use Capell\Frontend\Actions\RenderRenderableAction;
-use Capell\Frontend\Contracts\FrontendResourceContributor;
-use Capell\Frontend\Contracts\RenderHookExtensionInterface;
-use Capell\Frontend\Data\Assets\FrontendResourceContributionData;
-use Capell\Frontend\Data\Assets\FrontendResourceData;
 use Capell\Frontend\Data\Assets\ViteResourceSourceData;
 use Capell\Frontend\Data\FrontendContext;
-use Capell\Frontend\Data\FrontendResourceContextData;
-use Capell\Frontend\Data\FrontendRuntimeManifestData;
-use Capell\Frontend\Data\RenderHookContext;
 use Capell\Frontend\Data\RenderHookContributionData;
 use Capell\Frontend\Enums\RenderHookLocation;
-use Capell\Frontend\Enums\RenderingStrategyEnum;
 use Capell\Frontend\Events\FrontendContextResolved;
 use Capell\Frontend\Listeners\OnFrontendContextResolved;
 use Capell\Frontend\Support\Render\RenderHookRegistry;
@@ -505,7 +505,11 @@ it('attributes only selected rendered hooks with their explicit cache safety', f
         ->and($records[0]->cacheable)->toBeFalse();
 });
 
-it('does not mark empty rendered hook output as cache-unsafe', function (): void {
+it('records cache safety for a sensitive hook based on whether it renders output', function (
+    string $output,
+    bool $cacheable,
+    bool $sensitiveOutput,
+): void {
     $manifest = CapellManifestData::fromArray(capellManifestV3Array(
         name: 'vendor/editorial-tools',
         surfaces: ['frontend'],
@@ -526,85 +530,39 @@ it('does not mark empty rendered hook output as cache-unsafe', function (): void
 
     resolve(CapellPackageRegistry::class)->fill([$manifest->name => $manifest]);
 
-    $emptyHook = new class implements RenderHookExtensionInterface
+    $hook = new readonly class($output) implements RenderHookExtensionInterface
     {
+        public function __construct(private string $output) {}
+
         public function render(RenderHookContext $context): string
         {
             unset($context);
 
-            return '';
+            return $this->output;
         }
     };
 
     $registry = new RenderHookRegistry;
     $registry->contribute(new RenderHookContributionData(
         location: RenderHookLocation::Footer,
-        extension: $emptyHook,
+        extension: $hook,
         owner: $manifest->name,
-        key: 'empty-footer',
+        key: 'editorial-footer',
         target: 'article',
         cacheSafe: false,
     ));
 
-    expect($registry->renderAll(RenderHookLocation::Footer, target: 'article'))->toBe('');
+    expect($registry->renderAll(RenderHookLocation::Footer, target: 'article'))->toBe($output);
 
     $records = resolve(RecordExtensionRenderContributionAction::class)->recorded();
 
     expect($records)->toHaveCount(1)
-        ->and($records[0]->cacheable)->toBeTrue()
-        ->and($records[0]->sensitiveOutput)->toBeFalse();
-});
-
-it('keeps non-empty unsafe rendered hook output cache-unsafe', function (): void {
-    $manifest = CapellManifestData::fromArray(capellManifestV3Array(
-        name: 'vendor/editorial-tools',
-        surfaces: ['frontend'],
-        overrides: [
-            'performance' => [
-                'frontendRenderBudgetMs' => 0,
-                'cacheTags' => ['extension:editorial-tools'],
-                'cacheSafety' => [
-                    'cacheable' => false,
-                    'variesBy' => [],
-                    'sensitiveOutput' => true,
-                    'invalidationSources' => [],
-                    'queueInvalidation' => false,
-                ],
-            ],
-        ],
-    ));
-
-    resolve(CapellPackageRegistry::class)->fill([$manifest->name => $manifest]);
-
-    $unsafeHook = new class implements RenderHookExtensionInterface
-    {
-        public function render(RenderHookContext $context): string
-        {
-            unset($context);
-
-            return '<aside>unsafe</aside>';
-        }
-    };
-
-    $registry = new RenderHookRegistry;
-    $registry->contribute(new RenderHookContributionData(
-        location: RenderHookLocation::Footer,
-        extension: $unsafeHook,
-        owner: $manifest->name,
-        key: 'unsafe-footer',
-        target: 'article',
-        cacheSafe: false,
-    ));
-
-    expect($registry->renderAll(RenderHookLocation::Footer, target: 'article'))
-        ->toBe('<aside>unsafe</aside>');
-
-    $records = resolve(RecordExtensionRenderContributionAction::class)->recorded();
-
-    expect($records)->toHaveCount(1)
-        ->and($records[0]->cacheable)->toBeFalse()
-        ->and($records[0]->sensitiveOutput)->toBeTrue();
-});
+        ->and($records[0]->cacheable)->toBe($cacheable)
+        ->and($records[0]->sensitiveOutput)->toBe($sensitiveOutput);
+})->with([
+    'empty output' => ['', true, false],
+    'sensitive output' => ['<aside>unsafe</aside>', false, true],
+]);
 
 it('does not record dashboard Filament widgets as public frontend render contributions', function (): void {
     $manifest = CapellManifestData::fromArray(capellManifestV3Array(

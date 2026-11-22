@@ -1,7 +1,6 @@
 @php
-    use Capell\Core\Models\Language;
-    use Capell\Core\Support\Locale\HtmlLanguageAttribute;
-    use Capell\Frontend\Actions\ResolveDocumentLanguageAction;
+    use Capell\Frontend\Actions\BuildPublicDocumentLanguageDataAction;
+    use Capell\Frontend\Actions\BuildPublicSiteSchemaDataAction;
     use Capell\Frontend\Data\Assets\RenderedFrontendResourcesData;
     use Capell\Frontend\Enums\RenderHookLocation;
     use Capell\Frontend\Facades\Frontend;
@@ -9,18 +8,9 @@
     use Capell\Frontend\Support\Render\HeadMetadataCollector;
     use Capell\Frontend\Support\Security\JsonLdScriptSanitizer;
 
-    // A page served from a fallback language is written in that language.
-    $documentLanguage = ResolveDocumentLanguageAction::run(
-        Frontend::page(),
-        ($language ?? null) instanceof Language ? $language : Frontend::language(),
-    );
-    $documentLanguageCode = HtmlLanguageAttribute::forLanguage($documentLanguage);
-    $documentDirection = $documentLanguage?->direction() ?? Language::directionForCode(app()->getLocale());
+    $documentLanguage = BuildPublicDocumentLanguageDataAction::run($language ?? null);
 
-    $site = Frontend::site();
-    $siteMeta = $site?->meta ?? [];
-    $metaSchema = data_get($siteMeta, 'meta_schema');
-    $customMetaSchema = data_get($siteMeta, 'custom_meta_schema');
+    $siteSchema = BuildPublicSiteSchemaDataAction::run();
     $runtimeManifest ??= null;
     $usesLivewire = $runtimeManifest?->usesLivewire ?? ($livewireEnabled ?? false);
 @endphp
@@ -28,8 +18,8 @@
 <!DOCTYPE html>
 <html
     class="h-full"
-    lang="{{ $documentLanguageCode }}"
-    dir="{{ $documentDirection }}"
+    lang="{{ $documentLanguage->code }}"
+    dir="{{ $documentLanguage->direction }}"
 >
     <x-capell::app.head
         :livewire-enabled="$usesLivewire"
@@ -43,7 +33,7 @@
         :layout="$layout"
         :language="$language"
         :page-record="$pageRecord"
-        :site="$site"
+        :site="$site ?? null"
         :theme="$theme"
     >
         {{ $slot }}
@@ -72,15 +62,13 @@
             @livewireScripts
         @endif
 
-        @if ($metaSchema)
-            @foreach ($metaSchema as $schema)
-                <x-dynamic-component :component="$schema" />
-            @endforeach
-        @endif
+        @foreach ($siteSchema->schemaComponents as $schema)
+            <x-dynamic-component :component="$schema" />
+        @endforeach
 
-        @if ($customMetaSchema)
+        @if ($siteSchema->customSchema !== null)
             <script type="application/ld+json">
-                {!! JsonLdScriptSanitizer::sanitize((string) $customMetaSchema) !!}
+                {!! JsonLdScriptSanitizer::sanitize($siteSchema->customSchema) !!}
             </script>
         @endif
     </x-capell::app.body>

@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use Capell\Core\Data\Rendering\FrontendRuntimeManifestData;
 use Capell\Core\Enums\ContentGraph\ContentGraphEdgeKind;
 use Capell\Core\Enums\ContentGraph\ContentGraphEdgeStrength;
+use Capell\Core\Enums\Rendering\RenderingStrategyEnum;
 use Capell\Core\Models\Blueprint;
 use Capell\Core\Models\ContentGraphEdge;
 use Capell\Core\Models\Language;
@@ -15,10 +17,8 @@ use Capell\Core\Models\Translation;
 use Capell\Frontend\Data\Assets\FrontendResourcePlanData;
 use Capell\Frontend\Data\CachedPublicPageRenderData;
 use Capell\Frontend\Data\FrontendRenderContextData;
-use Capell\Frontend\Data\FrontendRuntimeManifestData;
 use Capell\Frontend\Data\PublicPageRenderData;
 use Capell\Frontend\Enums\CacheEnum;
-use Capell\Frontend\Enums\RenderingStrategyEnum;
 use Capell\Frontend\Support\Cache\PageModelCache;
 use Capell\Frontend\Support\Cache\PublicPageRenderDataCache;
 use Carbon\CarbonImmutable;
@@ -115,11 +115,6 @@ function warmLocalizedMediaRenderCache(
     expect($key)->toBeString();
 
     $cache->remember($context, fn (): PublicPageRenderData => new PublicPageRenderData(
-        page: $page,
-        site: $site,
-        language: $language,
-        layout: $context->layout,
-        theme: $context->theme,
         layoutGraph: null,
         runtimeManifest: $runtime,
         resourcePlan: new FrontendResourcePlanData([], [], [], [], [], [], [], 'test'),

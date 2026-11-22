@@ -3,7 +3,10 @@
 declare(strict_types=1);
 
 use Capell\Core\Contracts\BladeComponentResolverInterface;
+use Capell\Core\Contracts\Pageable;
 use Capell\Core\Data\RenderableDefinitionData;
+use Capell\Core\Data\Rendering\FrontendRuntimeManifestData;
+use Capell\Core\Enums\Rendering\RenderingStrategyEnum;
 use Capell\Core\Models\Language;
 use Capell\Core\Models\Layout;
 use Capell\Core\Models\Page;
@@ -16,8 +19,7 @@ use Capell\Frontend\Contracts\PublicContentWidgetPayloadBuilder;
 use Capell\Frontend\Contracts\PublicLayoutGraphBuilder;
 use Capell\Frontend\Contracts\PublicWidgetInteractionLocatorBuilder;
 use Capell\Frontend\Data\FrontendRenderContextData;
-use Capell\Frontend\Data\FrontendRuntimeManifestData;
-use Capell\Frontend\Enums\RenderingStrategyEnum;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\File;
 
 beforeEach(function (): void {
@@ -66,7 +68,7 @@ it('builds public page render data from the resolved frontend render context', f
         'resources/css/app.css' => ['file' => 'assets/app-test.css', 'isEntry' => true],
     ], JSON_THROW_ON_ERROR));
 
-    $language = Language::factory()->createOne(['code' => 'en']);
+    $language = Language::factory()->createOne(['code' => 'id']);
     $site = Site::factory()->createOne(['language_id' => $language->id]);
     $theme = Theme::factory()->createOne(['key' => 'render-data-theme', 'meta' => ['assets' => ['resources/css/app.css']]]);
     $layout = Layout::factory()->site($site)->create([
@@ -107,15 +109,14 @@ it('builds public page render data from the resolved frontend render context', f
         runtimeManifest: FrontendRuntimeManifestData::forRenderingStrategy(RenderingStrategyEnum::BladeOnly),
     ));
 
-    expect($renderData->page)->toBe($page)
-        ->and($renderData->site)->toBe($site)
-        ->and($renderData->language)->toBe($language)
+    // Public Blade, fragments and exports read this object, so no model may
+    // reach them through it, however deeply nested.
+    expect(eloquentModelsWithin($renderData))->toBe([])
         ->and($renderData->context?->site?->name)->toBe($site->name)
         ->and($renderData->context?->language?->code)->toBe($language->code)
         ->and($renderData->context?->layout?->key)->toBe($layout->key)
         ->and($renderData->context?->theme?->key)->toBe($theme->key)
         ->and($renderData->context?->page?->name)->toBe($page->name)
-        ->and(json_encode($renderData->context, JSON_THROW_ON_ERROR))->not->toContain('"id"')
         ->and($renderData->runtimeManifest->usesLivewire)->toBeFalse()
         ->and($renderData->resourcePlan->headResources)->toHaveCount(2)
         ->and(collect($renderData->resourcePlan->headResources)
@@ -124,8 +125,14 @@ it('builds public page render data from the resolved frontend render context', f
         ->and($renderData->surrogateKeys)->toBe([
             'page-' . $page->getKey(),
             'site-' . $site->getKey(),
-            'lang-en',
+            'lang-id',
         ]);
+
+    $publicContext = $renderData->context?->toArray() ?? [];
+    expect($publicContext)->toHaveKeys(['page', 'site', 'language', 'layout', 'theme'])->not->toHaveKey('id');
+    foreach ($publicContext as $projection) {
+        expect($projection)->toBeArray()->not->toHaveKey('id');
+    }
 
     expect($renderData->layoutGraph?->key)->toBe('home')
         ->and($renderData->layoutGraph?->containers)->toHaveCount(1);
@@ -203,3 +210,43 @@ it('builds optional widget interaction locators before public Blade rendering', 
     expect($renderData->widgetInteractionLocator('target-instance'))->toEndWith('/opaque')
         ->and($renderData->widgetInteractionLocator('missing'))->toBeNull();
 });
+
+/**
+ * Class names of every Eloquent model or Pageable reachable from the value
+ * through properties of any visibility and arrays.
+ *
+ * @return list<class-string>
+ */
+function eloquentModelsWithin(mixed $value, ?WeakMap $seen = null): array
+{
+    $seen ??= new WeakMap;
+
+    if (is_array($value)) {
+        $found = [];
+
+        foreach ($value as $item) {
+            array_push($found, ...eloquentModelsWithin($item, $seen));
+        }
+
+        return $found;
+    }
+
+    if (! is_object($value) || isset($seen[$value])) {
+        return [];
+    }
+
+    if ($value instanceof Model || $value instanceof Pageable) {
+        return [$value::class];
+    }
+
+    $seen[$value] = true;
+    $found = [];
+
+    foreach (new ReflectionObject($value)->getProperties() as $property) {
+        if (! $property->isStatic() && $property->isInitialized($value)) {
+            array_push($found, ...eloquentModelsWithin($property->getValue($value), $seen));
+        }
+    }
+
+    return $found;
+}

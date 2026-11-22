@@ -24,7 +24,7 @@ The Render Hook system lets you inject custom content into asset and result comp
 In your package's service provider:
 
 ```php
-use Capell\Frontend\Data\RenderHookContext;
+use Capell\Core\Data\Rendering\RenderHookContext;
 use Capell\Frontend\Enums\RenderHookLocation;
 use Capell\Frontend\Support\Render\RenderHookRegistry;
 
@@ -75,6 +75,11 @@ standalone component renders. Use its `preparedWidgetHtml()` accessor for prepar
 widget content. The main-content hook also receives this DTO in
 `MainContentRenderHookData::$publicRenderData`.
 
+`PublicPageRenderData` holds hydrated Data only and implements the
+`PublicRenderData` marker, so the `capell.publicRenderDataModel` PHPStan rule
+rejects any Eloquent model added to it. Read the page, site, language, layout
+and theme from its `context` (`PublicRenderContextData`), never from models.
+
 The response renderer enters this scope after `PublicLayoutRenderPreparer` runs
 and restores the previous value in `finally`, including nested renders and
 exceptions. Do not retain the DTO beyond that render or pass it as a component
@@ -122,7 +127,9 @@ Hooks are available in:
 
 ## Contract
 
-- Implement `RenderHookExtensionInterface` for reusable, testable extensions.
+- Implement `Capell\Core\Contracts\Rendering\RenderHookExtensionInterface` for reusable, testable extensions. It receives `Capell\Core\Data\Rendering\RenderHookContext`, so a runtime package can implement the hook without depending on Frontend.
+- Register the hook from a frontend provider through `FrontendHookRegistrar` or `RenderHookRegistry`. Frontend owns placement, cache safety and rendering.
+- The previous `Capell\Core\Contracts\Rendering\RenderHookExtensionInterface` and `Capell\Core\Data\Rendering\RenderHookContext` names remain aliases for existing integrations.
 
 ---
 

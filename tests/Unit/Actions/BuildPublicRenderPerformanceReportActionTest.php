@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
+use Capell\Core\Data\Rendering\Assets\FrontendResourceContributionData;
+use Capell\Core\Data\Rendering\Assets\FrontendResourceData;
+use Capell\Core\Data\Rendering\FrontendRuntimeManifestData;
+use Capell\Core\Enums\Rendering\FrontendResourceKind;
+use Capell\Core\Enums\Rendering\FrontendResourcePlacement;
+use Capell\Core\Enums\Rendering\RenderingStrategyEnum;
 use Capell\Frontend\Actions\BuildPublicRenderPerformanceReportAction;
 use Capell\Frontend\Actions\ResolveFrontendResourcePlanAction;
-use Capell\Frontend\Data\Assets\FrontendResourceContributionData;
-use Capell\Frontend\Data\Assets\FrontendResourceData;
 use Capell\Frontend\Data\Assets\FrontendResourcePlanData;
 use Capell\Frontend\Data\Assets\PublicResourceSourceData;
 use Capell\Frontend\Data\Assets\ResolvedFrontendResourceData;
-use Capell\Frontend\Data\FrontendRuntimeManifestData;
 use Capell\Frontend\Data\PublicPageRenderData;
-use Capell\Frontend\Enums\FrontendResourceKind;
-use Capell\Frontend\Enums\FrontendResourcePlacement;
 use Capell\Frontend\Enums\FrontendResourceSourceKind;
-use Capell\Frontend\Enums\RenderingStrategyEnum;
 use Capell\Frontend\Support\Assets\CompressedAssetSizeResolver;
 use Illuminate\Support\Facades\Cache;
 
@@ -26,7 +26,7 @@ it('summarises the resolved resource plan without fetching remote resources', fu
         new FrontendResourceContributionData(FrontendResourceData::style('capell-app/theme:style', 'capell-app/theme', new PublicResourceSourceData('theme.css'))),
         new FrontendResourceContributionData(FrontendResourceData::inlineStyle('capell-app/theme:critical', 'capell-app/theme', '.hero{display:block}', criticalCssEligible: true)),
     ]);
-    $renderData = new PublicPageRenderData(null, null, null, null, null, null, $runtime, $plan, ['page-1']);
+    $renderData = new PublicPageRenderData(null, $runtime, $plan, ['page-1']);
 
     $report = BuildPublicRenderPerformanceReportAction::run($renderData);
 
@@ -81,7 +81,7 @@ function renderDataWithLocalScript(string $path): PublicPageRenderData
     );
     $plan = new FrontendResourcePlanData([], [$resource], [], [], [], [], [], 'fp');
 
-    return new PublicPageRenderData(null, null, null, null, null, null, $runtime, $plan, []);
+    return new PublicPageRenderData(null, $runtime, $plan, []);
 }
 
 it('does not gzip local assets on the default public render path', function (): void {
