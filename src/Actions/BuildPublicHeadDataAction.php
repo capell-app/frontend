@@ -212,7 +212,7 @@ final class BuildPublicHeadDataAction
         $pageHead = $collector->collect(HeadContentSanitizer::headSnippet(data_get($pageMeta, 'meta_tags')));
         $customHead = $collector->collect(RenderCustomHeadAction::run($title, $description, $keywords));
         $sectionHead = $collector->collect($this->views->yieldContent('meta'));
-        $headMetadata = BuildHeadMetadataAction::run($socialTitle, $description, $canonicalUrl, $safeStringAttribute($siteTranslation, 'title'), $robots, Frontend::isError(), $collector->values(), ResolveHeadImageUrlAction::run($page, $site));
+        $headMetadata = BuildHeadMetadataAction::run($socialTitle, $description, $canonicalUrl, $safeStringAttribute($siteTranslation, 'title'), $robots, Frontend::isError(), $collector->values(), ResolveHeadImageUrlAction::run($page, $site), $aiDisclosure?->digitalSourceType());
 
         $isGoogleFont = false;
         $fontUrls = [];
@@ -319,7 +319,17 @@ final class BuildPublicHeadDataAction
 
             $files = [];
             foreach ($font['files'] as $file) {
-                $files[] = sprintf("url('%s') format('%s')", asset('storage/' . $file), $resolver->getFontFileType($file));
+                $url = is_string($file) ? HeadContentSanitizer::cssUrl(asset('storage/' . $file)) : null;
+
+                if ($url === null) {
+                    continue;
+                }
+
+                $files[] = sprintf("url('%s') format('%s')", $url, $resolver->getFontFileType($file));
+            }
+
+            if ($files === []) {
+                continue;
             }
 
             $localFonts[] = [

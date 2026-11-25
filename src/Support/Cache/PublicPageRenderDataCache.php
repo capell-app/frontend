@@ -24,6 +24,7 @@ use Capell\Frontend\Data\PublicRenderDataContributionMetadataData;
 use Capell\Frontend\Data\RenderedModelIdentitiesData;
 use Capell\Frontend\Enums\CacheEnum;
 use Capell\Frontend\Enums\FrontendRenderAudience;
+use Capell\Frontend\Support\Loader\PageCachePolicy;
 use Capell\Frontend\Support\Render\PublicRenderDataContributorRegistry;
 use Carbon\CarbonInterface;
 use Closure;
@@ -133,6 +134,12 @@ final class PublicPageRenderDataCache
             return null;
         }
 
+        // A page type that is never cached renders for one visitor: its render data
+        // (content widget payloads included) must not reach the shared store.
+        if (PageCachePolicy::neverCached($page)) {
+            return null;
+        }
+
         // Rules that cannot be read leave nothing safe to store or reuse.
         if (! resolve(PublicReadEligibilityState::class)->stamp() instanceof PublicReadStampData) {
             return null;
@@ -206,6 +213,7 @@ final class PublicPageRenderDataCache
             $this->resourceSelectionFingerprint(),
             ($metadata ?? $this->contributors->metadata($context))->fingerprint,
             $this->publicReadEligibilityStamp(),
+            $this->requestOrigin(),
         ];
 
         return hash('xxh128', implode('|', array_map(
@@ -224,6 +232,16 @@ final class PublicPageRenderDataCache
     private function publicReadEligibilityStamp(): string
     {
         return resolve(PublicReadEligibilityState::class)->stamp()?->key() ?? 'unreadable';
+    }
+
+    /**
+     * Resource plans store absolute asset URLs built from the request root, so two domains
+     * (or schemes) serving one site must not share an entry. Invalidation is unaffected: it
+     * bumps the generation inside the content version, which retires every origin's entry.
+     */
+    private function requestOrigin(): string
+    {
+        return request()->getSchemeAndHttpHost();
     }
 
     private function resourceSelectionFingerprint(): string

@@ -8,7 +8,9 @@ use Capell\Core\Contracts\PublicRead\PublicPageReadEligibility;
 use Capell\Core\Data\PublicRead\PublicPageReadCandidateData;
 use Capell\Core\Data\Rendering\FrontendResourceContextData;
 use Capell\Core\Data\Rendering\FrontendRuntimeManifestData;
+use Capell\Core\Enums\CacheTime;
 use Capell\Core\Enums\Rendering\RenderingStrategyEnum;
+use Capell\Core\Models\Blueprint;
 use Capell\Core\Models\Language;
 use Capell\Core\Models\Layout;
 use Capell\Core\Models\Page;
@@ -36,6 +38,7 @@ use Capell\Frontend\Support\Render\PublicRenderDataContributorRegistry;
 use Capell\Frontend\Support\State\FrontendState;
 use Capell\Frontend\Tests\Fixtures\RecordingRenderedModelTracker;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\DB;
 
@@ -61,6 +64,38 @@ it('builds deterministic render data cache keys from page site language strategy
         ->and($key)->toContain('site-' . $site->id)
         ->and($key)->toContain('lang-' . $language->id)
         ->and($key)->toContain('strategy-blade');
+});
+
+it('keeps render data cache entries separate per request origin and retires every origin on invalidation', function (): void {
+    $page = Page::factory()
+        ->withTranslations()
+        ->createOne();
+    $language = Language::query()->findOrFail((int) $page->translations->first()->language_id);
+    $site = Site::query()->findOrFail((int) $page->site_id);
+    $context = new FrontendRenderContextData(
+        page: $page,
+        site: $site,
+        language: $language,
+        layout: Layout::query()->find($page->layout_id),
+        theme: $site->theme,
+        runtimeManifest: FrontendRuntimeManifestData::forRenderingStrategy(RenderingStrategyEnum::BladeOnly),
+    );
+    $cache = resolve(PublicPageRenderDataCache::class);
+    $keyFor = static fn (string $url): ?string => (function () use ($cache, $context, $url): ?string {
+        app()->instance('request', Request::create($url));
+
+        return $cache->keyForContext($context);
+    })();
+
+    $first = $keyFor('https://one.example.test/page');
+
+    expect($keyFor('https://one.example.test/other'))->toBe($first)
+        ->and($keyFor('https://two.example.test/page'))->not->toBe($first)
+        ->and($keyFor('http://one.example.test/page'))->not->toBe($first);
+
+    $cache->invalidate($page::class, (int) $page->getKey(), (int) $site->getKey(), (int) $language->getKey());
+
+    expect($keyFor('https://one.example.test/page'))->not->toBe($first);
 });
 
 it('isolates render data cache entries for theme previews', function (): void {
@@ -138,6 +173,50 @@ it('remembers public page render data when the render data cache is enabled', fu
         ->and($second)->toBeInstanceOf(PublicPageRenderData::class)
         ->and($calls)->toBe(1);
 });
+
+it('builds render data on every request for a page whose type is never cached', function (bool $typeLoaded): void {
+    config()->set('cache.default', 'array');
+    config()->set('capell-frontend.public_render_data_cache', true);
+
+    $type = Blueprint::factory()->page()->meta(['cache_time' => CacheTime::Never->value])->createOne();
+    $page = Page::query()->with('translations')->whereKey(Page::factory()
+        ->type($type)
+        ->withTranslations()
+        ->createOne()
+        ->getKey())->sole();
+    if ($typeLoaded) {
+        $page->load('blueprint');
+    }
+
+    expect($page->relationLoaded('blueprint'))->toBe($typeLoaded);
+    $language = Language::query()->findOrFail((int) $page->translations->firstOrFail()->language_id);
+    $site = Site::query()->findOrFail((int) $page->site_id);
+    $runtime = FrontendRuntimeManifestData::forRenderingStrategy(RenderingStrategyEnum::BladeOnly);
+    $context = new FrontendRenderContextData(
+        page: $page,
+        site: $site,
+        language: $language,
+        layout: Layout::query()->find($page->layout_id),
+        theme: $site->theme,
+        runtimeManifest: $runtime,
+    );
+    $visitors = ['first visitor', 'second visitor'];
+
+    $builder = function () use (&$visitors, $runtime): PublicPageRenderData {
+        return new PublicPageRenderData(
+            layoutGraph: null,
+            runtimeManifest: $runtime,
+            resourcePlan: new FrontendResourcePlanData([], [], [], [], [], [], [], hash('sha256', 'empty')),
+            surrogateKeys: [(string) array_shift($visitors)],
+        );
+    };
+
+    $cache = resolve(PublicPageRenderDataCache::class);
+
+    expect($cache->remember($context, $builder)->surrogateKeys)->toBe(['first visitor'])
+        ->and($cache->remember($context, $builder)->surrogateKeys)->toBe(['second visitor'])
+        ->and($cache->keyForContext($context))->toBeNull();
+})->with(['type loaded with the page' => true, 'type not loaded with the page' => false]);
 
 it('does not rebuild contributor values on a warm cache hit', function (): void {
     config()->set('cache.default', 'array');
